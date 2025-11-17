@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import volunteerService from '../../services/volunteerService';
 
 const CreateCampaignWizard = ({ onClose, onCreateCampaign }) => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -17,6 +18,22 @@ const CreateCampaignWizard = ({ onClose, onCreateCampaign }) => {
     coOrganizers: [],
   });
   const [errors, setErrors] = useState({});
+  const [volunteers, setVolunteers] = useState([]);
+
+  useEffect(() => {
+    const loadVolunteers = async () => {
+      try {
+        const response = await volunteerService.getLeaderboard(10);
+        if (response.success) {
+          setVolunteers(response.leaderboard);
+        }
+      } catch (error) {
+        console.error('Failed to load volunteers:', error);
+      }
+    };
+
+    loadVolunteers();
+  }, []);
 
   const TOTAL_STEPS = 5;
   const MATERIALS_OPTIONS = [
@@ -342,10 +359,11 @@ const CreateCampaignWizard = ({ onClose, onCreateCampaign }) => {
                 <div>
                   <label className="block text-sm font-bold text-gray-900 mb-2">Co-Organizers</label>
                   <div className="space-y-2">
-                    {['Sarah Chen', 'Alex Rivera', 'Maria Garcia'].map((name) => (
-                      <label key={name} className="flex items-center p-2 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                    {volunteers.slice(0, 3).map((volunteer) => (
+                      <label key={volunteer.user_id} className="flex items-center p-2 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
                         <input type="checkbox" className="w-4 h-4" />
-                        <span className="ml-3 font-medium text-gray-900">{name}</span>
+                        <span className="ml-3 font-medium text-gray-900">{volunteer.name}</span>
+                        <span className="ml-2 text-xs text-green-600">{volunteer.badge}</span>
                       </label>
                     ))}
                   </div>
@@ -354,10 +372,11 @@ const CreateCampaignWizard = ({ onClose, onCreateCampaign }) => {
                 <div>
                   <label className="block text-sm font-bold text-gray-900 mb-2">Invite Friends</label>
                   <div className="space-y-2">
-                    {['John Doe', 'Jane Smith', 'Mike Johnson', 'Emma Wilson'].map((name) => (
-                      <label key={name} className="flex items-center p-2 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                    {volunteers.slice(3, 7).map((volunteer) => (
+                      <label key={volunteer.user_id} className="flex items-center p-2 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
                         <input type="checkbox" className="w-4 h-4" />
-                        <span className="ml-3 font-medium text-gray-900">{name}</span>
+                        <span className="ml-3 font-medium text-gray-900">{volunteer.name}</span>
+                        <span className="ml-2 text-xs text-gray-600">{volunteer.past_cleanup_count} cleanups</span>
                       </label>
                     ))}
                   </div>

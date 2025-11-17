@@ -1,7 +1,6 @@
-import axios from 'axios';
-
 // Mock service for now - replace with real Gemini API later
-export const analyzeTrashImage = async (imageBase64) => {
+export const analyzeTrashImage = async (_imageBase64) => {
+  void _imageBase64;
   // Simulate API delay
   await new Promise(resolve => setTimeout(resolve, 1500));
   

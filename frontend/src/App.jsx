@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import {
   Box,
   Flex,
@@ -16,6 +16,7 @@ import {
   FiCamera,
   FiMap,
   FiUser,
+  FiCompass,
 } from 'react-icons/fi';
 import SplashScreen from './components/SplashScreen';
 import FeedPage from './components/FeedPage';
@@ -23,6 +24,9 @@ import CameraPage from './components/CameraPage';
 import MapPage from './components/MapPage';
 import ProfilePage from './components/ProfilePage';
 import CampaignsPage from './components/campaigns/CampaignsPage';
+import BackendTestPage from './components/BackendTestPage';
+import AnalyticsDashboard from './components/AnalyticsDashboard';
+import NavigationPage from './components/NavigationPage';
 
 function App() {
   const [windowHeight, setWindowHeight] = useState('100vh');
@@ -51,12 +55,13 @@ function App() {
   // Get current active tab from route
   const getCurrentTab = () => {
     const path = location.pathname;
-    if (path === '/' || path === '/feed') return 'feed';
+    if (path === '/' || path === '/nav') return 'nav';
+    if (path === '/feed') return 'feed';
     if (path === '/campaigns') return 'campaigns';
     if (path === '/report') return 'camera';
     if (path === '/map') return 'map';
     if (path === '/profile') return 'profile';
-    return 'feed';
+    return 'nav';
   };
 
   const activeTab = getCurrentTab();
@@ -80,6 +85,7 @@ function App() {
   }, []);
 
   const tabs = [
+    { id: 'nav', label: 'Explore', icon: FiCompass, path: '/nav' },
     { id: 'feed', label: 'Feed', icon: FiHome, path: '/feed' },
     { id: 'campaigns', label: 'Campaigns', icon: FiShare2, path: '/campaigns' },
     { id: 'camera', label: 'Report', icon: FiCamera, path: '/report' },
@@ -105,14 +111,25 @@ function App() {
       className="app-container safe-area-inset"
     >
       {/* Main Content Area */}
-      <Box flex="1" overflow="hidden" position="relative">
+      <Box 
+        flex="1" 
+        overflowY="auto" 
+        overflowX="hidden"
+        position="relative"
+        pb="64px" // Add padding for bottom nav
+      >
         <Routes>
-          <Route path="/" element={<FeedPage />} />
+          <Route path="/" element={<Navigate to="/nav" replace />} />
+          <Route path="/nav" element={<NavigationPage />} />
           <Route path="/feed" element={<FeedPage />} />
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/report" element={<CameraPage />} />
           <Route path="/map" element={<MapPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/test" element={<BackendTestPage />} />
+          <Route path="/analytics" element={<AnalyticsDashboard />} />
+          {/* Catch-all route */}
+          <Route path="*" element={<Navigate to="/nav" replace />} />
         </Routes>
       </Box>
 

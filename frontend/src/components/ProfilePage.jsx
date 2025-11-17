@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Flex,
@@ -21,8 +21,17 @@ import {
   Divider,
   SimpleGrid,
   Circle,
+  Spinner,
+  Alert,
+  AlertIcon,
+  Tabs,
+  TabList,
+  TabPanels,
+  Tab,
+  TabPanel,
 } from '@chakra-ui/react';
 import { FiCalendar, FiTrendingUp, FiAward, FiTarget, FiMapPin, FiZap } from 'react-icons/fi';
+import volunteerService from '../services/volunteerService';
 
 // User data and recent activities
 const USER_DATA = {
@@ -82,8 +91,30 @@ const STATS_DATA = [
 
 const ProfilePage = () => {
   const [showHeader, setShowHeader] = useState(true);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState(0);
   const lastScrollYRef = React.useRef(0);
   const progressPercent = Math.round((USER_DATA.currentWeekPoints / USER_DATA.weeklyGoal) * 100);
+
+  // Load leaderboard data
+  useEffect(() => {
+    const loadLeaderboard = async () => {
+      try {
+        setLeaderboardLoading(true);
+        const response = await volunteerService.getLeaderboard(10);
+        if (response.success) {
+          setLeaderboard(response.leaderboard);
+        }
+      } catch (error) {
+        console.error('Failed to load leaderboard:', error);
+      } finally {
+        setLeaderboardLoading(false);
+      }
+    };
+
+    loadLeaderboard();
+  }, []);
 
   // Scroll handler optimized for compact header
   const handleScroll = React.useCallback((e) => {
@@ -144,8 +175,17 @@ const ProfilePage = () => {
         pb="80px"
         transition="padding-top 0.3s ease"
       >
-        {/* Detailed Profile Section */}
-        <Card bg="white" mx={4} mb={4} borderRadius="xl" overflow="hidden">
+        {/* Tabs for Profile and Leaderboard */}
+        <Tabs index={activeTab} onChange={setActiveTab} variant="soft-rounded" colorScheme="brand" px={4} mb={4}>
+          <TabList bg="white" borderRadius="xl" p={1}>
+            <Tab flex={1} fontWeight="bold">My Profile</Tab>
+            <Tab flex={1} fontWeight="bold">🏆 Leaderboard</Tab>
+          </TabList>
+          
+          <TabPanels>
+            <TabPanel p={0} pt={4}>
+              {/* Original Profile Content */}
+              <Card bg="white" mx={4} mb={4} borderRadius="xl" overflow="hidden">
           <CardBody p={6}>
             {/* Full Profile Info */}
             <VStack spacing={4}>
@@ -303,8 +343,103 @@ const ProfilePage = () => {
             >
               View Achievements
             </Button>
-          </VStack>
-        </Box>
+            </VStack>
+          </Box>
+            </TabPanel>            <TabPanel p={0} pt={4}>
+              {/* Leaderboard Section */}
+              <Card bg="white" borderRadius="xl" overflow="hidden">
+                <CardBody p={6}>
+                  <VStack spacing={4} align="stretch">
+                    <HStack justify="space-between" align="center">
+                      <Heading size="md" color="gray.900">🏆 Top Volunteers</Heading>
+                      <Badge colorScheme="brand" fontSize="xs" px={2} py={1}>
+                        {leaderboard.length} Active
+                      </Badge>
+                    </HStack>
+                    
+                    {leaderboardLoading ? (
+                      <VStack py={8}>
+                        <Spinner size="lg" color="brand.500" />
+                        <Text color="gray.500">Loading leaderboard...</Text>
+                      </VStack>
+                    ) : (
+                      <VStack spacing={3} align="stretch">
+                        {leaderboard.map((volunteer, index) => (
+                          <HStack 
+                            key={volunteer.user_id ? `${volunteer.user_id}-${volunteer.rank || index}` : `vol-${index}`}
+                            p={4} 
+                            bg={index < 3 ? "brand.50" : "gray.50"} 
+                            borderRadius="lg"
+                            border={index < 3 ? "1px solid" : "none"}
+                            borderColor={index < 3 ? "brand.200" : "transparent"}
+                          >
+                            <VStack spacing={0} minW="40px">
+                              <Text 
+                                fontSize="lg" 
+                                fontWeight="bold" 
+                                color={index === 0 ? "yellow.500" : index === 1 ? "gray.400" : index === 2 ? "orange.400" : "gray.600"}
+                              >
+                                #{volunteer.rank}
+                              </Text>
+                              {index < 3 && (
+                                <Text fontSize="xs">
+                                  {index === 0 ? "🥇" : index === 1 ? "🥈" : "🥉"}
+                                </Text>
+                              )}
+                            </VStack>
+                            
+                            <Avatar 
+                              name={volunteer.name} 
+                              size="md"
+                              bg="brand.500"
+                              color="white"
+                            />
+                            
+                            <VStack align="start" spacing={0} flex={1}>
+                              <Text fontWeight="bold" color="gray.900">
+                                {volunteer.name}
+                              </Text>
+                              <HStack spacing={2}>
+                                <Text fontSize="sm" color="gray.600">
+                                  {volunteer.past_cleanup_count} cleanups
+                                </Text>
+                                <Text fontSize="sm" color="gray.400">•</Text>
+                                <Text fontSize="sm" color="gray.600">
+                                  {volunteer.experience_level}
+                                </Text>
+                              </HStack>
+                            </VStack>
+                            
+                            <VStack align="end" spacing={1}>
+                              <Badge 
+                                colorScheme={index < 3 ? "yellow" : "gray"} 
+                                fontSize="xs"
+                              >
+                                {volunteer.badge}
+                              </Badge>
+                              {volunteer.available && (
+                                <Badge colorScheme="green" variant="subtle" fontSize="xs">
+                                  Available
+                                </Badge>
+                              )}
+                            </VStack>
+                          </HStack>
+                        ))}
+                        
+                        {leaderboard.length === 0 && (
+                          <Alert status="info">
+                            <AlertIcon />
+                            No volunteers found in the leaderboard.
+                          </Alert>
+                        )}
+                      </VStack>
+                    )}
+                  </VStack>
+                </CardBody>
+              </Card>
+            </TabPanel>
+          </TabPanels>
+        </Tabs>
       </Box>
     </Flex>
   );

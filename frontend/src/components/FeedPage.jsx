@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Box,
   VStack,
@@ -16,7 +16,6 @@ import {
   Stat,
   StatLabel,
   StatNumber,
-  Image,
   Textarea,
   IconButton,
   Menu,
@@ -26,14 +25,13 @@ import {
   Divider,
   Alert,
   AlertIcon,
-  AlertTitle,
-  AlertDescription,
   Progress,
   Tabs,
   TabList,
   TabPanels,
   Tab,
   TabPanel,
+  Spinner,
 } from '@chakra-ui/react';
 import {
   FiHeart,
@@ -52,8 +50,282 @@ import {
   FiSearch,
   FiPlus,
   FiFilter,
+  FiRefreshCw,
 } from 'react-icons/fi';
+import campaignService from '../services/campaignService';
+import volunteerService from '../services/volunteerService';
+import trashReportService from '../services/trashReportService';
+import { normalizeCampaignList } from '../utils/campaignFormatter';
 import UserProfileModal from './UserProfileModal';
+
+const DEFAULT_IMPACT_STATS = {
+  activities: 0,
+  participants: 0,
+  itemsCollected: 0,
+  co2Saved: 0,
+  locationsCleared: 0,
+};
+
+const getSourceColor = (source) => {
+  if (source === 'network' || source === 'qdrant') return 'green';
+  if (source === 'memory') return 'blue';
+  if (source === 'local-cache' || source === 'storage') return 'yellow';
+  if (source === 'api-fallback') return 'orange';
+  return 'gray';
+};
+
+const safeNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const formatRelativeTime = (dateInput) => {
+  const date = new Date(dateInput || Date.now());
+  if (Number.isNaN(date.getTime())) {
+    return 'Just now';
+  }
+  const diffMs = Date.now() - date.getTime();
+  const minutes = Math.floor(diffMs / (1000 * 60));
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks}w ago`;
+  const months = Math.floor(days / 30);
+  return `${months || 1}mo ago`;
+};
+
+const getDateMeta = (value) => {
+  const parsed = new Date(value || Date.now());
+  if (Number.isNaN(parsed.getTime())) {
+    const fallback = new Date();
+    return { date: fallback, value: fallback.getTime() };
+  }
+  return { date: parsed, value: parsed.getTime() };
+};
+
+const getVolunteerIdentifier = (volunteer) => {
+  const fallbackParts = [
+    volunteer.name?.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'volunteer',
+    volunteer.metadata?.created_at,
+    volunteer.metadata?.timestamp,
+    volunteer.metadata?.updated_at,
+    volunteer.rank,
+    volunteer.badge,
+    volunteer.pastCleanupCount,
+  ].filter(Boolean);
+
+  return (
+    volunteer.id ||
+    volunteer.userId ||
+    volunteer.metadata?.id ||
+    volunteer.metadata?.source_id ||
+    volunteer.metadata?.volunteer_id ||
+    (fallbackParts.length ? fallbackParts.join('-') : `volunteer-${volunteer.pastCleanupCount || 'unknown'}`)
+  );
+};
+
+const formatVolunteerForFeed = (volunteer) => ({
+  id: getVolunteerIdentifier(volunteer),
+  name: volunteer.name,
+  username: volunteer.metadata?.username || volunteer.id?.slice(0, 8) || 'volunteer',
+  avatar: volunteer.profilePictureUrl || '',
+  location: volunteer.location?.address || 'United Arab Emirates',
+  joinDate: volunteer.metadata?.created_at || volunteer.metadata?.timestamp,
+  totalPoints: volunteer.metadata?.impact_points || safeNumber(volunteer.pastCleanupCount, 1) * 40,
+  totalActivities: volunteer.pastCleanupCount || 0,
+  rank: volunteer.rank ? `#${volunteer.rank}` : volunteer.badge,
+  streak: volunteer.metadata?.activity_streak || volunteer.metadata?.streak || 0,
+  totalItems: volunteer.metadata?.total_items_removed,
+  co2Saved: volunteer.metadata?.co2_saved,
+  totalHours: volunteer.hoursContributed || 0,
+  level: volunteer.badge,
+  verified: true,
+  title: `${volunteer.badge || 'Eco'} Volunteer`,
+  rawVolunteer: volunteer,
+});
+
+const buildCampaignActivity = (campaign) => {
+  if (!campaign) return null;
+  const { date: campaignDate, value: timestampValue } = getDateMeta(
+    campaign.date || campaign.timeline?.startDate
+  );
+  const stats = {
+    items: safeNumber(campaign.esgImpact?.itemsCollected),
+    co2Saved: campaign.esgImpact?.co2Saved ? `${safeNumber(campaign.esgImpact.co2Saved)}kg` : null,
+    volunteers: safeNumber(campaign.volunteers?.length || campaign.volunteerSummary?.current),
+    points: safeNumber(campaign.funding?.current / 100),
+  };
+
+  return {
+    id: `campaign-${campaign.id}`,
+    user: {
+      id: campaign.organizer?.id || campaign.organizer?.name || campaign.id,
+      name: campaign.organizer?.name || 'EcoSynk Operations',
+      username: campaign.organizer?.username || 'ecosynk',
+      avatar: '',
+      location: campaign.location?.address || 'Unknown location',
+      joinDate: campaign.timeline?.startDate,
+      totalPoints: stats.points * 10,
+      totalActivities: stats.volunteers,
+      rank: campaign.status === 'completed' ? 'Completed' : 'Active',
+      streak: campaign.timeline?.daysRemaining || 0,
+      totalItems: stats.items,
+      co2Saved: safeNumber(campaign.esgImpact?.co2Saved),
+      totalHours: campaign.timeline?.durationDays || 0,
+      level: campaign.priority || campaign.difficulty || 'Medium',
+      verified: true,
+      title: 'Campaign Organizer',
+    },
+    type: 'campaign',
+    title: campaign.title,
+    description: campaign.description,
+    location: campaign.location?.address || 'Unknown location',
+    timestamp: formatRelativeTime(campaignDate),
+    timestampValue,
+    duration: campaign.timeline?.durationDays ? `${campaign.timeline.durationDays} days` : 'Scheduled',
+    stats,
+    images: [campaign.image || '♻️'],
+    tags: campaign.hotspot?.materials || [],
+    likes: stats.volunteers,
+    comments: Math.max(2, Math.round(stats.points / 5)),
+    weather: null,
+    achievements: campaign.status === 'completed' ? ['Campaign Complete'] : null,
+  };
+};
+
+const buildVolunteerActivity = (volunteer) => {
+  if (!volunteer) return null;
+  const volunteerId = getVolunteerIdentifier(volunteer);
+  const { date: volunteerDate, value: timestampValue } = getDateMeta(
+    volunteer.metadata?.updated_at || volunteer.metadata?.created_at
+  );
+  const stats = {
+    level: volunteer.badge,
+    points: safeNumber(volunteer.metadata?.impact_points || volunteer.pastCleanupCount * 50),
+    items: safeNumber(volunteer.metadata?.total_items_removed),
+    volunteers: volunteer.pastCleanupCount,
+  };
+  return {
+    id: `volunteer-${volunteerId}`,
+    user: formatVolunteerForFeed(volunteer),
+    type: 'milestone',
+    title: `${volunteer.name} reached ${volunteer.badge} status`,
+    description:
+      volunteer.metadata?.bio ||
+      `Celebrating ${volunteer.pastCleanupCount || 0}+ cleanups across the UAE. Keep the streak going!`,
+    location: volunteer.location?.address || 'United Arab Emirates',
+    timestamp: formatRelativeTime(volunteerDate),
+    timestampValue,
+    duration: 'Milestone',
+    stats,
+    images: ['🏅', '🌱'],
+    tags: volunteer.skills || [],
+    likes: Math.max(12, volunteer.pastCleanupCount || 3),
+    comments: Math.max(1, Math.round((volunteer.pastCleanupCount || 2) / 2)),
+    achievements: volunteer.skills?.slice(0, 2) || null,
+  };
+};
+
+const buildReportActivity = (report) => {
+  if (!report) return null;
+  const { date: reportDate, value: timestampValue } = getDateMeta(report.timestamp);
+  return {
+    id: `report-${report.id}`,
+    user: {
+      id: report.metadata?.analyzed_by || report.id,
+      name: 'AI Report',
+      username: 'ecosynk_ai',
+      avatar: '',
+      location: report.location?.address || 'Unknown location',
+      joinDate: reportDate,
+      totalPoints: 0,
+      totalActivities: 0,
+      rank: 'Reporter',
+      streak: 0,
+      totalItems: 0,
+      co2Saved: 0,
+      totalHours: 0,
+      level: 'AI',
+      verified: true,
+      title: 'Cleanup Reporter',
+    },
+    type: 'report',
+    title: `Waste hotspot in ${report.location?.address || 'your area'}`,
+    description: report.description,
+    location: report.location?.address,
+    timestamp: formatRelativeTime(reportDate),
+    timestampValue,
+    duration: 'Report',
+    stats: {
+      items: safeNumber(report.metadata?.estimated_items || report.metadata?.items_estimated),
+      points: safeNumber(report.cleanupPriority * 10),
+      co2Saved: null,
+      volunteers: null,
+      reports: safeNumber(report.metadata?.reports || 1),
+      impact: report.riskLevel || 'Medium Priority',
+      followUps: safeNumber(report.metadata?.follow_ups),
+    },
+    images: ['📍'],
+    tags: [report.primaryMaterial, report.estimatedVolume, report.riskLevel].filter(Boolean),
+    likes: Math.max(3, Math.round(report.cleanupPriority)),
+    comments: Math.max(1, Math.round(report.cleanupPriority / 2)),
+    achievements: ['Hotspot Identified'],
+  };
+};
+
+const buildFeedActivities = (campaigns, volunteers, reports) => {
+  const items = [
+    ...campaigns.map(buildCampaignActivity),
+    ...volunteers.slice(0, 5).map(buildVolunteerActivity),
+    ...reports.slice(0, 5).map(buildReportActivity),
+  ].filter(Boolean);
+
+  const seenIds = new Map();
+
+  return items
+    .sort((a, b) => (b.timestampValue || 0) - (a.timestampValue || 0))
+    .map((item) => {
+      const baseId = item.id || 'activity';
+      const occurrence = seenIds.get(baseId) || 0;
+      seenIds.set(baseId, occurrence + 1);
+      const uniqueId = occurrence === 0 ? baseId : `${baseId}__${occurrence + 1}`;
+
+      return {
+        ...item,
+        id: uniqueId,
+        timestampValue: undefined
+      };
+    });
+};
+
+const buildImpactStats = (campaigns, reports) => {
+  if (!campaigns.length && !reports.length) {
+    return DEFAULT_IMPACT_STATS;
+  }
+
+  const participants = campaigns.reduce(
+    (sum, campaign) => sum + safeNumber(campaign.volunteers?.length || campaign.volunteerSummary?.current),
+    0
+  );
+  const items = campaigns.reduce((sum, campaign) => sum + safeNumber(campaign.esgImpact?.itemsCollected), 0);
+  const co2 = campaigns.reduce((sum, campaign) => sum + safeNumber(campaign.esgImpact?.co2Saved), 0);
+  const locations = new Set([
+    ...campaigns.map((campaign) => campaign.location?.address).filter(Boolean),
+    ...reports.map((report) => report.location?.address).filter(Boolean),
+  ]);
+
+  return {
+    activities: campaigns.length + reports.length,
+    participants,
+    itemsCollected: items + reports.length * 5,
+    co2Saved: co2,
+    locationsCleared: locations.size || campaigns.length,
+  };
+};
 
 const FeedPage = () => {
   const scrollRef = useRef(null);
@@ -64,183 +336,14 @@ const FeedPage = () => {
   const [newPost, setNewPost] = useState('');
   const [activeTab, setActiveTab] = useState(0);
   const [likedPosts, setLikedPosts] = useState(new Set());
-
-  // Enhanced mock data with more Strava-like structure
-  const MOCK_USERS = {
-    'ahmed_rashid': {
-      id: 'ahmed_rashid',
-      name: 'Ahmed Al Rashid',
-      username: 'ahmed_rashid',
-      avatar: '',
-      location: 'Dubai, UAE',
-      joinDate: 'Oct 2023',
-      totalPoints: 2850,
-      totalActivities: 47,
-      rank: '#12',
-      streak: 15,
-      totalItems: 1245,
-      co2Saved: 340,
-      totalHours: 89,
-      level: 12,
-      verified: true,
-      title: 'Beach Guardian'
-    },
-    'sara_zahra': {
-      id: 'sara_zahra',
-      name: 'Sara Al Zahra',
-      username: 'sara_zahra',
-      avatar: '',
-      location: 'Abu Dhabi, UAE',
-      joinDate: 'Sep 2023',
-      totalPoints: 3420,
-      totalActivities: 52,
-      rank: '#8',
-      streak: 23,
-      totalItems: 1567,
-      co2Saved: 425,
-      totalHours: 103,
-      level: 14,
-      verified: true,
-      title: 'Eco Champion'
-    },
-    'omar_mansoori': {
-      id: 'omar_mansoori',
-      name: 'Omar Al Mansoori',
-      username: 'omar_mansoori',
-      avatar: '',
-      location: 'Sharjah, UAE',
-      joinDate: 'Aug 2023',
-      totalPoints: 4150,
-      totalActivities: 63,
-      rank: '#3',
-      streak: 31,
-      totalItems: 2134,
-      co2Saved: 580,
-      totalHours: 145,
-      level: 18,
-      verified: true,
-      title: 'Sustainability Hero'
-    }
-  };
-
-  const MOCK_ACTIVITIES = [
-    {
-      id: 1,
-      user: MOCK_USERS.ahmed_rashid,
-      type: 'cleanup',
-      title: 'Beach Cleanup at Jumeirah',
-      description: 'Amazing morning cleaning up Jumeirah Beach with the community! Found some interesting items and met incredible people passionate about our environment. 🏖️ #DubaiCleanup #BeachGuardian',
-      location: 'Jumeirah Beach, Dubai',
-      timestamp: '2 hours ago',
-      duration: '2h 30m',
-      stats: {
-        items: 67,
-        points: 201,
-        co2Saved: '45kg',
-        volunteers: 12
-      },
-      images: ['🏖️', '♻️'],
-      tags: ['beach-cleanup', 'community', 'dubai'],
-      likes: 24,
-      comments: 8,
-      weather: { temp: '28°C', condition: 'Sunny' },
-      achievements: ['Beach Guardian', 'Team Player']
-    },
-    {
-      id: 2,
-      user: MOCK_USERS.sara_zahra,
-      type: 'campaign',
-      title: 'Leading Green Business Bay Initiative',
-      description: 'Proud to lead today\'s corporate cleanup campaign in Business Bay! Our team collected over 200 items and educated 50+ office workers about waste reduction. Small steps, big impact! 🏢',
-      location: 'Business Bay, Dubai',
-      timestamp: '4 hours ago',
-      duration: '3h 45m',
-      stats: {
-        items: 234,
-        points: 702,
-        co2Saved: '89kg',
-        volunteers: 28
-      },
-      images: ['🏢', '📊'],
-      tags: ['campaign', 'business', 'leadership'],
-      likes: 42,
-      comments: 15,
-      weather: { temp: '26°C', condition: 'Partly Cloudy' },
-      achievements: ['Campaign Leader', 'Corporate Impact']
-    },
-    {
-      id: 3,
-      user: MOCK_USERS.omar_mansoori,
-      type: 'report',
-      title: 'Documented Waste Hotspot in Al Salam Park',
-      description: 'Identified and reported a concerning waste accumulation area in Al Salam Park. Working with local authorities to organize a targeted cleanup next weekend. Every report matters! 📍',
-      location: 'Al Salam Park, Sharjah',
-      timestamp: '6 hours ago',
-      duration: '1h 15m',
-      stats: {
-        reports: 5,
-        points: 25,
-        impact: 'High Priority',
-        followUps: 3
-      },
-      images: ['🌳', '📋'],
-      tags: ['reporting', 'park', 'community-action'],
-      likes: 18,
-      comments: 6,
-      weather: { temp: '29°C', condition: 'Clear' },
-      achievements: ['Eagle Eye', 'Community Guardian']
-    },
-    {
-      id: 4,
-      user: MOCK_USERS.ahmed_rashid,
-      type: 'milestone',
-      title: 'Reached Level 12 - Beach Guardian! 🏆',
-      description: 'Incredible milestone achieved! Thanks to everyone who supported my journey. 1000+ items collected, 15-day streak, and countless memories with amazing eco-warriors. Next stop: Level 15! 🌊',
-      location: 'Dubai, UAE',
-      timestamp: '1 day ago',
-      duration: 'Achievement',
-      stats: {
-        level: 12,
-        points: 2850,
-        streak: 15,
-        rank: '#12'
-      },
-      images: ['🏆', '⭐'],
-      tags: ['milestone', 'achievement', 'level-up'],
-      likes: 89,
-      comments: 23,
-      achievements: ['Beach Guardian', 'Consistency Champion']
-    },
-    {
-      id: 5,
-      user: MOCK_USERS.sara_zahra,
-      type: 'challenge',
-      title: 'UAE National Day Cleanup Challenge',
-      description: 'Join me in the UAE National Day special challenge! Let\'s clean up 71 locations across the Emirates in honor of our nation. Who\'s in? 🇦🇪 #UAE51 #NationalDay',
-      location: 'Nationwide, UAE',
-      timestamp: '1 day ago',
-      duration: 'Challenge',
-      stats: {
-        participants: 156,
-        locations: 23,
-        goal: 71,
-        timeLeft: '6 days'
-      },
-      images: ['🇦🇪', '🎯'],
-      tags: ['challenge', 'national-day', 'uae'],
-      likes: 67,
-      comments: 34,
-      achievements: ['Challenge Creator', 'National Pride']
-    }
-  ];
-
-  const TODAY_IMPACT = {
-    activities: 23,
-    participants: 156,
-    itemsCollected: 1247,
-    co2Saved: 342,
-    locationsCleared: 8
-  };
+  const [activities, setActivities] = useState([]);
+  const [todayImpact, setTodayImpact] = useState(DEFAULT_IMPACT_STATS);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+  const [warning, setWarning] = useState(null);
+  const [metadata, setMetadata] = useState({ campaigns: null, volunteers: null, reports: null });
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   const handleScroll = useCallback(() => {
     const currentScrollY = scrollRef.current?.scrollTop || 0;
@@ -269,6 +372,98 @@ const FeedPage = () => {
   const openProfile = (user) => {
     setSelectedUser(user);
     setIsProfileModalOpen(true);
+  };
+
+  const loadFeedData = useCallback(
+    async ({ forceRefresh = false } = {}) => {
+      setError(null);
+      setWarning(null);
+      setIsLoading((prev) => (forceRefresh ? prev : true));
+      setIsRefreshing(forceRefresh);
+
+      try {
+        const [campaignResult, volunteerResult, reportResult] = await Promise.allSettled([
+          campaignService.getAllCampaigns({ limit: 120, forceRefresh }),
+          volunteerService.getLeaderboard(15, { forceRefresh }),
+          trashReportService.getRecentTrashReports({ limit: 30 }),
+        ]);
+
+        const issues = [];
+        const warnings = [];
+        let campaigns = [];
+        let volunteers = [];
+        let reports = [];
+        const nextMetadata = {};
+
+        if (campaignResult.status === 'fulfilled' && campaignResult.value.success) {
+          campaigns = normalizeCampaignList(campaignResult.value.campaigns || []);
+          nextMetadata.campaigns = {
+            source: campaignResult.value.source,
+            count: campaigns.length,
+          };
+          if (campaignResult.value.warning) {
+            warnings.push(campaignResult.value.warning);
+          }
+        } else {
+          issues.push('Unable to load campaigns');
+        }
+
+        if (volunteerResult.status === 'fulfilled' && volunteerResult.value.success) {
+          volunteers = volunteerResult.value.leaderboard || [];
+          nextMetadata.volunteers = {
+            source: volunteerResult.value.source,
+            count: volunteers.length,
+          };
+          if (volunteerResult.value.warning) {
+            warnings.push(volunteerResult.value.warning);
+          }
+        } else {
+          issues.push('Unable to load volunteers');
+        }
+
+        if (reportResult.status === 'fulfilled' && reportResult.value.success) {
+          reports = reportResult.value.reports || [];
+          nextMetadata.reports = {
+            source: reportResult.value.source,
+            count: reports.length,
+          };
+          if (reportResult.value.warning) {
+            warnings.push(reportResult.value.warning);
+          }
+        } else {
+          issues.push('Unable to load reports');
+        }
+
+        const hasData = campaigns.length || volunteers.length || reports.length;
+        if (!hasData) {
+          setError(issues.join('. ') || 'No feed data available');
+        } else if (issues.length) {
+          setWarning(issues.join('. '));
+        } else if (warnings.length) {
+          setWarning(warnings.join('. '));
+        }
+
+        setActivities(buildFeedActivities(campaigns, volunteers, reports));
+        setTodayImpact(buildImpactStats(campaigns, reports));
+        setMetadata(nextMetadata);
+        setLastUpdated(new Date());
+      } catch (err) {
+        console.error('Feed load failed:', err);
+        setError(err.message || 'Unable to load feed');
+      } finally {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    loadFeedData();
+  }, [loadFeedData]);
+
+  const handleRefresh = () => {
+    loadFeedData({ forceRefresh: true });
   };
 
   const getActivityIcon = (type) => {
@@ -369,39 +564,24 @@ const FeedPage = () => {
             </HStack>
           )}
 
-          {/* Stats Grid */}
-          <Grid templateColumns="repeat(auto-fit, minmax(120px, 1fr))" gap={3} mb={3}>
-            {activity.stats.items && (
-              <Stat textAlign="center" p={2} bg="green.50" borderRadius="md">
-                <StatNumber fontSize="lg" color="green.600">{activity.stats.items}</StatNumber>
-                <StatLabel fontSize="xs" color="green.600">Items</StatLabel>
-              </Stat>
-            )}
-            {activity.stats.points && (
-              <Stat textAlign="center" p={2} bg="purple.50" borderRadius="md">
-                <StatNumber fontSize="lg" color="purple.600">+{activity.stats.points}</StatNumber>
-                <StatLabel fontSize="xs" color="purple.600">Points</StatLabel>
-              </Stat>
-            )}
-            {activity.stats.co2Saved && (
-              <Stat textAlign="center" p={2} bg="blue.50" borderRadius="md">
-                <StatNumber fontSize="lg" color="blue.600">{activity.stats.co2Saved}</StatNumber>
-                <StatLabel fontSize="xs" color="blue.600">CO₂ Saved</StatLabel>
-              </Stat>
-            )}
-            {activity.stats.volunteers && (
-              <Stat textAlign="center" p={2} bg="orange.50" borderRadius="md">
-                <StatNumber fontSize="lg" color="orange.600">{activity.stats.volunteers}</StatNumber>
-                <StatLabel fontSize="xs" color="orange.600">Volunteers</StatLabel>
-              </Stat>
-            )}
-            {activity.stats.level && (
-              <Stat textAlign="center" p={2} bg="yellow.50" borderRadius="md">
-                <StatNumber fontSize="lg" color="yellow.600">Level {activity.stats.level}</StatNumber>
-                <StatLabel fontSize="xs" color="yellow.600">Achieved</StatLabel>
-              </Stat>
-            )}
-          </Grid>
+          {/* Activity Stats */}
+          {activity.stats && (
+            <Grid templateColumns="repeat(3, 1fr)" gap={3} mb={4}>
+              {Object.entries(activity.stats)
+                .filter(([, value]) => value !== null && value !== undefined)
+                .slice(0, 3)
+                .map(([label, value]) => (
+                  <GridItem key={label}>
+                    <Stat>
+                      <StatLabel textTransform="capitalize" color="gray.500">
+                        {label}
+                      </StatLabel>
+                      <StatNumber fontSize="lg">{value}</StatNumber>
+                    </Stat>
+                  </GridItem>
+                ))}
+            </Grid>
+          )}
 
           {/* Weather & Duration */}
           <HStack justify="space-between" fontSize="sm" color="gray.600" mb={3}>
@@ -428,8 +608,8 @@ const FeedPage = () => {
           {/* Tags */}
           {activity.tags && (
             <HStack spacing={2} mb={3} flexWrap="wrap">
-              {activity.tags.map((tag) => (
-                <Badge key={tag} variant="outline" colorScheme="gray" size="sm">
+              {activity.tags.map((tag, index) => (
+                <Badge key={`${tag}-${index}`} variant="outline" colorScheme="gray" size="sm">
                   #{tag}
                 </Badge>
               ))}
@@ -483,13 +663,21 @@ const FeedPage = () => {
             <VStack align="start" spacing={1}>
               <Heading size="lg" color="brand.600">Feed</Heading>
               <Text fontSize="sm" color="gray.600">
-                {TODAY_IMPACT.activities} activities today
+                {todayImpact.activities} activities today
               </Text>
             </VStack>
             <HStack spacing={2}>
               <IconButton icon={<FiSearch />} variant="ghost" size="sm" />
               <IconButton icon={<FiFilter />} variant="ghost" size="sm" />
               <IconButton icon={<FiPlus />} variant="ghost" size="sm" colorScheme="brand" />
+              <IconButton
+                icon={<FiRefreshCw />}
+                variant="ghost"
+                size="sm"
+                aria-label="Refresh feed"
+                onClick={handleRefresh}
+                isLoading={isRefreshing}
+              />
             </HStack>
           </HStack>
 
@@ -498,19 +686,19 @@ const FeedPage = () => {
             <Box maxW="600px" mx="auto">
               <HStack justify="space-between" color="white" fontSize="xs">
                 <VStack spacing={0}>
-                  <Text fontWeight="bold">{TODAY_IMPACT.participants}</Text>
+                  <Text fontWeight="bold">{todayImpact.participants}</Text>
                   <Text opacity={0.9}>Active</Text>
                 </VStack>
                 <VStack spacing={0}>
-                  <Text fontWeight="bold">{TODAY_IMPACT.itemsCollected}</Text>
+                  <Text fontWeight="bold">{todayImpact.itemsCollected}</Text>
                   <Text opacity={0.9}>Items</Text>
                 </VStack>
                 <VStack spacing={0}>
-                  <Text fontWeight="bold">{TODAY_IMPACT.co2Saved}kg</Text>
+                  <Text fontWeight="bold">{todayImpact.co2Saved}kg</Text>
                   <Text opacity={0.9}>CO₂ Saved</Text>
                 </VStack>
                 <VStack spacing={0}>
-                  <Text fontWeight="bold">{TODAY_IMPACT.locationsCleared}</Text>
+                  <Text fontWeight="bold">{todayImpact.locationsCleared}</Text>
                   <Text opacity={0.9}>Locations</Text>
                 </VStack>
               </HStack>
@@ -527,6 +715,30 @@ const FeedPage = () => {
                 <Tab flex={1}>Challenges</Tab>
               </TabList>
             </Tabs>
+            {(metadata.campaigns || metadata.volunteers || metadata.reports || lastUpdated) && (
+              <HStack spacing={2} mt={2} flexWrap="wrap">
+                {metadata.campaigns && (
+                  <Badge colorScheme={getSourceColor(metadata.campaigns.source)}>
+                    Campaigns · {metadata.campaigns.source}
+                  </Badge>
+                )}
+                {metadata.volunteers && (
+                  <Badge colorScheme={getSourceColor(metadata.volunteers.source)}>
+                    Volunteers · {metadata.volunteers.source}
+                  </Badge>
+                )}
+                {metadata.reports && (
+                  <Badge colorScheme={getSourceColor(metadata.reports.source)}>
+                    Reports · {metadata.reports.source}
+                  </Badge>
+                )}
+                {lastUpdated && (
+                  <Text fontSize="xs" color="gray.500">
+                    Updated {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
+                )}
+              </HStack>
+            )}
           </Box>
         </VStack>
       </Box>
@@ -543,6 +755,23 @@ const FeedPage = () => {
         h="100vh"
       >
         <VStack spacing={4} pb={6}>
+          {(error || warning) && (
+            <Box w="full">
+              {error && (
+                <Alert status="error" borderRadius="lg" mb={warning ? 3 : 0}>
+                  <AlertIcon />
+                  {error}
+                </Alert>
+              )}
+              {!error && warning && (
+                <Alert status="warning" borderRadius="lg">
+                  <AlertIcon />
+                  {warning}
+                </Alert>
+              )}
+            </Box>
+          )}
+
           {/* Create Post Section */}
           <Card w="full" variant="outline">
             <CardBody>
@@ -571,13 +800,33 @@ const FeedPage = () => {
           </Card>
 
           {/* Activities Feed */}
-          {MOCK_ACTIVITIES.map((activity) => (
-            <ActivityCard key={activity.id} activity={activity} />
-          ))}
+          {isLoading ? (
+            <Card w="full" variant="outline">
+              <CardBody>
+                <VStack spacing={3} py={6}>
+                  <Spinner color="brand.500" />
+                  <Text color="gray.600">Loading live activities...</Text>
+                </VStack>
+              </CardBody>
+            </Card>
+          ) : activities.length ? (
+            activities.map((activity) => <ActivityCard key={activity.id} activity={activity} />)
+          ) : (
+            <Card w="full" variant="outline">
+              <CardBody>
+                <VStack spacing={2} py={4}>
+                  <Text fontWeight="semibold">No activities yet</Text>
+                  <Text fontSize="sm" color="gray.600">
+                    Try refreshing or adjusting filters to see more updates.
+                  </Text>
+                </VStack>
+              </CardBody>
+            </Card>
+          )}
 
-          {/* Load More */}
-          <Button variant="outline" size="lg" w="full" mt={4}>
-            Load More Activities
+          {/* Refresh CTA */}
+          <Button variant="outline" size="lg" w="full" isDisabled={isLoading} onClick={handleRefresh}>
+            Refresh Feed
           </Button>
         </VStack>
       </Box>

@@ -9,7 +9,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -167,7 +167,7 @@ class EcoSynkVectorStore:
         try:
             # Add timestamp if not present
             if 'timestamp' not in metadata:
-                metadata['timestamp'] = datetime.utcnow().isoformat()
+                metadata['timestamp'] = datetime.now(timezone.utc).isoformat()
             
             # Store the report_id in metadata for retrieval
             metadata['report_id'] = report_id
@@ -229,8 +229,7 @@ class EcoSynkVectorStore:
             # Calculate cutoff date if time filter specified
             cutoff_date = None
             if time_window_days:
-                from datetime import timedelta
-                cutoff_date = datetime.utcnow() - timedelta(days=time_window_days)
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=time_window_days)
             
             for result in results:
                 # Apply time filter if specified
@@ -239,6 +238,8 @@ class EcoSynkVectorStore:
                     if timestamp_str:
                         try:
                             report_date = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                            if report_date.tzinfo is None:
+                                report_date = report_date.replace(tzinfo=timezone.utc)
                             if report_date < cutoff_date:
                                 continue  # Skip reports older than cutoff
                         except:
@@ -284,7 +285,7 @@ class EcoSynkVectorStore:
         try:
             # Ensure required fields
             if 'created_at' not in profile_data:
-                profile_data['created_at'] = datetime.utcnow().isoformat()
+                profile_data['created_at'] = datetime.now(timezone.utc).isoformat()
             
             # Store the user_id in metadata for retrieval
             profile_data['user_id'] = user_id
@@ -511,7 +512,7 @@ class EcoSynkVectorStore:
         """Get all active campaigns (not expired, status='active')"""
         try:
             all_campaigns = self.get_all_campaigns()
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             
             active = []
             for campaign in all_campaigns:
@@ -521,6 +522,8 @@ class EcoSynkVectorStore:
                         continue
                     
                     end_date = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                    if end_date.tzinfo is None:
+                        end_date = end_date.replace(tzinfo=timezone.utc)
                     status = campaign.get('status', 'unknown')
                     
                     if end_date > now and status == 'active':

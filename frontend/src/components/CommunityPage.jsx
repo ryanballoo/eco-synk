@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box,
   Flex,
@@ -21,78 +21,172 @@ import {
   StatLabel,
   StatNumber,
   Divider,
+  Spinner,
+  Alert,
+  AlertIcon,
+  IconButton,
 } from '@chakra-ui/react';
-import { FiUsers, FiAward, FiCalendar, FiPlus, FiTrendingUp } from 'react-icons/fi';
+import { FiUsers, FiAward, FiCalendar, FiPlus, FiTrendingUp, FiRefreshCw } from 'react-icons/fi';
+import campaignService from '../services/campaignService';
+import volunteerService from '../services/volunteerService';
+import { normalizeCampaignList } from '../utils/campaignFormatter';
+
+const getSourceColor = (source) => {
+  if (source === 'network' || source === 'qdrant') return 'green';
+  if (source === 'memory') return 'blue';
+  if (source === 'local-cache' || source === 'storage') return 'yellow';
+  if (source === 'api-fallback') return 'orange';
+  return 'gray';
+};
+
+const formatCleanupDate = (date) => {
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'Scheduled soon';
+  }
+  return parsed.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const deriveLeaderboard = (volunteers = []) =>
+  volunteers.slice(0, 4).map((volunteer, index) => ({
+    rank: volunteer.rank || index + 1,
+    name: volunteer.name,
+    points: volunteer.metadata?.impact_points || (volunteer.pastCleanupCount || 0) * 40,
+    members: volunteer.pastCleanupCount || 0,
+    progress: Math.min(100, ((volunteer.pastCleanupCount || 0) / 50) * 100),
+    badge: ['🏆', '🥈', '🥉', '⭐'][index] || '🌱',
+    color: ['yellow', 'gray', 'orange', 'blue'][index] || 'green',
+  }));
+
+const deriveCleanups = (campaigns = []) =>
+  campaigns
+    .filter((campaign) => campaign.status !== 'completed')
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .slice(0, 4)
+    .map((campaign) => ({
+      id: campaign.id,
+      title: campaign.title,
+      location: campaign.location?.address || 'Unknown location',
+      date: formatCleanupDate(campaign.date),
+      participants: campaign.volunteers?.length || campaign.volunteerSummary?.current || 0,
+      maxParticipants: campaign.volunteerGoal || 0,
+      organizer: campaign.organizer?.name || 'EcoSynk Operations',
+    }));
+
+const deriveStats = (volunteerMeta, campaigns = [], leaderboardData = []) => {
+  const totalMembers = volunteerMeta?.totalVolunteers || leaderboardData.length;
+  const totalPoints = leaderboardData.reduce((sum, entry) => sum + (entry.points || 0), 0);
+  const itemsCollected = campaigns.reduce((sum, campaign) => sum + (campaign.esgImpact?.itemsCollected || 0), 0);
+  return {
+    totalMembers,
+    activeCleanups: campaigns.filter((campaign) => campaign.status !== 'completed').length,
+    totalPoints,
+    itemsCollected,
+  };
+};
 
 const CommunityPage = () => {
-  // Mock data
-  const leaderboard = [
-    {
-      rank: 1,
-      name: 'Green Warriors',
-      points: 245,
-      members: 12,
-      progress: 85,
-      badge: '🏆',
-      color: 'yellow'
-    },
-    {
-      rank: 2,
-      name: 'Eco Heroes',
-      points: 189,
-      members: 8,
-      progress: 65,
-      badge: '🥈',
-      color: 'gray'
-    },
-    {
-      rank: 3,
-      name: 'Clean Crew',
-      points: 156,
-      members: 15,
-      progress: 55,
-      badge: '🥉',
-      color: 'orange'
-    },
-    {
-      rank: 4,
-      name: 'Planet Savers',
-      points: 142,
-      members: 10,
-      progress: 50,
-      badge: '⭐',
-      color: 'blue'
-    }
-  ];
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [activeCleanups, setActiveCleanups] = useState([]);
+  const [communityStats, setCommunityStats] = useState({
+    totalMembers: 0,
+    activeCleanups: 0,
+    totalPoints: 0,
+    itemsCollected: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState(null);
+  const [warning, setWarning] = useState(null);
+  const [metadata, setMetadata] = useState({ campaigns: null, volunteers: null });
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  const activeCleanups = [
-    {
-      id: 1,
-      title: 'Beach Cleanup Day',
-      location: 'Ocean Beach',
-      date: 'Tomorrow, 9:00 AM',
-      participants: 8,
-      maxParticipants: 15,
-      organizer: 'Green Warriors'
-    },
-    {
-      id: 2,
-      title: 'Park Restoration',
-      location: 'Central Park',
-      date: 'Saturday, 10:00 AM',
-      participants: 12,
-      maxParticipants: 20,
-      organizer: 'Eco Heroes'
-    }
-  ];
+  const loadCommunityData = useCallback(
+      async ({ forceRefresh = false } = {}) => {
+        setError(null);
+        setWarning(null);
+        setLoading((prev) => (forceRefresh ? prev : true));
+        setIsRefreshing(forceRefresh);
 
-  const communityStats = {
-    totalMembers: 156,
-    activeCleanups: 8,
-    totalPoints: 2450,
-    itemsCollected: 1245
-  };
+        try {
+          const [campaignResult, volunteerResult] = await Promise.allSettled([
+            campaignService.getAllCampaigns({ limit: 150, forceRefresh }),
+            volunteerService.getLeaderboard(12, { forceRefresh }),
+          ]);
 
+          const nextMetadata = {};
+          const issues = [];
+          const warnings = [];
+          let campaigns = [];
+          let volunteers = [];
+          let volunteerMeta = null;
+
+          if (campaignResult.status === 'fulfilled' && campaignResult.value.success) {
+            campaigns = normalizeCampaignList(campaignResult.value.campaigns || []);
+            nextMetadata.campaigns = {
+              source: campaignResult.value.source,
+              count: campaigns.length,
+            };
+            if (campaignResult.value.warning) {
+              warnings.push(campaignResult.value.warning);
+            }
+          } else {
+            issues.push('Unable to load campaigns');
+          }
+
+          if (volunteerResult.status === 'fulfilled' && volunteerResult.value.success) {
+            volunteers = volunteerResult.value.leaderboard || [];
+            volunteerMeta = volunteerResult.value;
+            nextMetadata.volunteers = {
+              source: volunteerResult.value.source,
+              count: volunteers.length,
+            };
+            if (volunteerResult.value.warning) {
+              warnings.push(volunteerResult.value.warning);
+            }
+          } else {
+            issues.push('Unable to load volunteers');
+          }
+
+          if (!campaigns.length && !volunteers.length) {
+            setError(issues.join('. ') || 'No community data available');
+          } else if (issues.length) {
+            setWarning(issues.join('. '));
+          } else if (warnings.length) {
+            setWarning(warnings.join('. '));
+          }
+
+          const leaderboardData = deriveLeaderboard(volunteers);
+          const cleanups = deriveCleanups(campaigns);
+          setLeaderboard(leaderboardData);
+          setActiveCleanups(cleanups);
+          setCommunityStats(deriveStats(volunteerMeta, campaigns, leaderboardData));
+          setMetadata(nextMetadata);
+          setLastUpdated(new Date());
+        } catch (err) {
+          console.error('Community load failed:', err);
+          setError(err.message || 'Unable to load community data');
+        } finally {
+          setLoading(false);
+          setIsRefreshing(false);
+        }
+      },
+      []
+    );
+
+    useEffect(() => {
+      loadCommunityData();
+    }, [loadCommunityData]);
+
+    const handleRefresh = () => {
+      loadCommunityData({ forceRefresh: true });
+    };
   return (
     <Flex direction="column" h="full" bg="gray.50" overflow="hidden">
       {/* Header */}
@@ -109,13 +203,20 @@ const CommunityPage = () => {
             <Heading size="lg" fontWeight="bold">Community</Heading>
             <Text fontSize="sm" opacity={0.9}>Join forces for a cleaner planet</Text>
           </VStack>
-          <Box
-            bg="whiteAlpha.20"
-            p={2}
-            borderRadius="lg"
-          >
-            <Icon as={FiUsers} boxSize={6} />
-          </Box>
+          <HStack spacing={3}>
+            <Box bg="whiteAlpha.20" p={2} borderRadius="lg">
+              <Icon as={FiUsers} boxSize={6} />
+            </Box>
+            <IconButton
+              aria-label="Refresh community data"
+              icon={<FiRefreshCw />}
+              size="sm"
+              variant="ghost"
+              colorScheme="whiteAlpha"
+              onClick={handleRefresh}
+              isLoading={isRefreshing}
+            />
+          </HStack>
         </HStack>
 
         {/* Community Stats */}
@@ -133,11 +234,47 @@ const CommunityPage = () => {
             </Stat>
           </GridItem>
         </Grid>
+
+        {(metadata.campaigns || metadata.volunteers || lastUpdated) && (
+          <HStack spacing={2} mt={3} flexWrap="wrap">
+            {metadata.campaigns && (
+              <Badge colorScheme={getSourceColor(metadata.campaigns.source)}>
+                Campaigns · {metadata.campaigns.source}
+              </Badge>
+            )}
+            {metadata.volunteers && (
+              <Badge colorScheme={getSourceColor(metadata.volunteers.source)}>
+                Volunteers · {metadata.volunteers.source}
+              </Badge>
+            )}
+            {lastUpdated && (
+              <Text fontSize="xs" opacity={0.8}>
+                Updated {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+            )}
+          </HStack>
+        )}
       </Box>
 
       {/* Content */}
       <Box flex="1" overflowY="auto" p={4} pb={24}>
         <VStack spacing={6} align="stretch">
+          {(error || warning) && (
+            <Box>
+              {error && (
+                <Alert status="error" borderRadius="lg" mb={warning ? 3 : 0}>
+                  <AlertIcon />
+                  {error}
+                </Alert>
+              )}
+              {!error && warning && (
+                <Alert status="warning" borderRadius="lg">
+                  <AlertIcon />
+                  {warning}
+                </Alert>
+              )}
+            </Box>
+          )}
           {/* Leaderboard Section */}
           <Card bg="white" shadow="sm" border="1px solid" borderColor="gray.200">
             <CardHeader pb={3}>
@@ -162,48 +299,60 @@ const CommunityPage = () => {
             </CardHeader>
 
             <CardBody pt={0}>
-              <VStack spacing={4}>
-                {leaderboard.map((team) => (
-                  <Box key={team.rank} w="full" p={3} bg="gray.50" borderRadius="lg">
-                    <HStack justify="space-between" align="start" mb={2}>
-                      <HStack spacing={3}>
-                        <Text fontSize="2xl">{team.badge}</Text>
-                        <VStack align="start" spacing={0}>
-                          <Text fontWeight="semibold" color="gray.900">
-                            {team.name}
-                          </Text>
-                          <HStack spacing={2}>
-                            <Icon as={FiUsers} boxSize={3} color="gray.500" />
-                            <Text fontSize="xs" color="gray.600">
-                              {team.members} members
+              {loading && !leaderboard.length ? (
+                <VStack spacing={3} py={4}>
+                  <Spinner color="purple.500" />
+                  <Text fontSize="sm" color="gray.600">Loading leaderboard...</Text>
+                </VStack>
+              ) : leaderboard.length ? (
+                <VStack spacing={4}>
+                  {leaderboard.map((team) => (
+                    <Box key={team.rank} w="full" p={3} bg="gray.50" borderRadius="lg">
+                      <HStack justify="space-between" align="start" mb={2}>
+                        <HStack spacing={3}>
+                          <Text fontSize="2xl">{team.badge}</Text>
+                          <VStack align="start" spacing={0}>
+                            <Text fontWeight="semibold" color="gray.900">
+                              {team.name}
                             </Text>
-                          </HStack>
-                        </VStack>
+                            <HStack spacing={2}>
+                              <Icon as={FiUsers} boxSize={3} color="gray.500" />
+                              <Text fontSize="xs" color="gray.600">
+                                {team.members} cleanups
+                              </Text>
+                            </HStack>
+                          </VStack>
+                        </HStack>
+                        <Badge 
+                          colorScheme={team.color} 
+                          fontSize="sm" 
+                          px={2} 
+                          py={1}
+                          borderRadius="full"
+                        >
+                          {team.points} pts
+                        </Badge>
                       </HStack>
-                      <Badge 
+                      
+                      <Progress 
+                        value={team.progress} 
                         colorScheme={team.color} 
-                        fontSize="sm" 
-                        px={2} 
-                        py={1}
+                        size="sm" 
                         borderRadius="full"
-                      >
-                        {team.points} pts
-                      </Badge>
-                    </HStack>
-                    
-                    <Progress 
-                      value={team.progress} 
-                      colorScheme={team.color} 
-                      size="sm" 
-                      borderRadius="full"
-                      mb={1}
-                    />
-                    <Text fontSize="xs" color="gray.600" textAlign="right">
-                      {team.progress}% to next level
-                    </Text>
-                  </Box>
-                ))}
-              </VStack>
+                        mb={1}
+                      />
+                      <Text fontSize="xs" color="gray.600" textAlign="right">
+                        {Math.round(team.progress)}% to next badge
+                      </Text>
+                    </Box>
+                  ))}
+                </VStack>
+              ) : (
+                <VStack spacing={3} py={4}>
+                  <Text fontWeight="semibold" color="gray.800">No leaderboard data</Text>
+                  <Text fontSize="sm" color="gray.600">Refresh to fetch volunteer rankings.</Text>
+                </VStack>
+              )}
 
               <Button 
                 w="full" 
@@ -242,7 +391,12 @@ const CommunityPage = () => {
             </CardHeader>
 
             <CardBody pt={0}>
-              {activeCleanups.length > 0 ? (
+              {loading && !activeCleanups.length ? (
+                <VStack spacing={3} py={4}>
+                  <Spinner color="green.500" />
+                  <Text fontSize="sm" color="gray.600">Loading upcoming cleanups...</Text>
+                </VStack>
+              ) : activeCleanups.length ? (
                 <VStack spacing={4}>
                   {activeCleanups.map((cleanup) => (
                     <Card key={cleanup.id} variant="outline" w="full" bg="gray.50">
@@ -251,7 +405,7 @@ const CommunityPage = () => {
                           <HStack justify="space-between" w="full">
                             <Heading size="sm" color="gray.900">{cleanup.title}</Heading>
                             <Badge colorScheme="green" fontSize="xs">
-                              {cleanup.participants}/{cleanup.maxParticipants}
+                              {cleanup.participants}/{cleanup.maxParticipants || cleanup.participants || 1}
                             </Badge>
                           </HStack>
                           
@@ -262,7 +416,7 @@ const CommunityPage = () => {
                           </VStack>
 
                           <Progress 
-                            value={(cleanup.participants / cleanup.maxParticipants) * 100} 
+                            value={cleanup.maxParticipants ? (cleanup.participants / cleanup.maxParticipants) * 100 : 100} 
                             colorScheme="green" 
                             size="sm" 
                             w="full"

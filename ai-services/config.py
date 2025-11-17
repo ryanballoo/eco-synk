@@ -3,12 +3,14 @@ Configuration management for EcoSynk AI Services
 """
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file in parent directory
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 def parse_bool(value: Optional[str], default: bool = True) -> bool:
     """Parse boolean value from string, handling various formats"""
@@ -18,6 +20,7 @@ def parse_bool(value: Optional[str], default: bool = True) -> bool:
 
 class Settings(BaseSettings):
     """Application settings"""
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="allow")
     
     # API Keys
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
@@ -33,7 +36,7 @@ class Settings(BaseSettings):
     # Model Configuration
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dimension: int = 384
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-2.0-flash-exp"
     
     # Qdrant Configuration
     trash_reports_collection: str = "trash_reports"
@@ -61,10 +64,6 @@ class Settings(BaseSettings):
         
         super().__init__(**kwargs)
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-
 # Global settings instance
 settings = Settings()
 

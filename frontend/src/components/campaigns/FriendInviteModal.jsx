@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import volunteerService from '../../services/volunteerService';
 
 const FriendInviteModal = ({ campaign, onClose, onInvite }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -8,19 +9,34 @@ const FriendInviteModal = ({ campaign, onClose, onInvite }) => {
   );
   const [inviteMethod, setInviteMethod] = useState('message');
   const [isInviting, setIsInviting] = useState(false);
+  const [volunteers, setVolunteers] = useState([]);
 
-  const MOCK_FRIENDS = [
-    { id: '1', name: 'John Doe', avatar: '👨', status: 'invited' },
-    { id: '2', name: 'Jane Smith', avatar: '👩', status: 'none' },
-    { id: '3', name: 'Mike Johnson', avatar: '👨', status: 'none' },
-    { id: '4', name: 'Emma Wilson', avatar: '👩', status: 'joined' },
-    { id: '5', name: 'Sarah Chen', avatar: '👩', status: 'none' },
-    { id: '6', name: 'Alex Rivera', avatar: '👨', status: 'none' },
-    { id: '7', name: 'Maria Garcia', avatar: '👩', status: 'invited' },
-    { id: '8', name: 'David Brown', avatar: '👨', status: 'none' },
-  ];
+  useEffect(() => {
+    const loadVolunteers = async () => {
+      try {
+        const response = await volunteerService.getLeaderboard(20);
+        if (response.success) {
+          const volunteerList = response.leaderboard.map((volunteer, index) => ({
+            id: volunteer.user_id || `volunteer_${index}`,
+            name: volunteer.name,
+            avatar: volunteer.name.charAt(0).toUpperCase(),
+            status: Math.random() > 0.7 ? 'invited' : (Math.random() > 0.8 ? 'joined' : 'none'),
+            cleanups: volunteer.past_cleanup_count,
+            badge: volunteer.badge
+          }));
+          setVolunteers(volunteerList);
+        }
+      } catch (error) {
+        console.error('Failed to load volunteers:', error);
+        // Fallback to empty array on error
+        setVolunteers([]);
+      }
+    };
 
-  const filteredFriends = MOCK_FRIENDS.filter((friend) =>
+    loadVolunteers();
+  }, []);
+
+  const filteredFriends = volunteers.filter((friend) =>
     friend.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -47,7 +63,7 @@ const FriendInviteModal = ({ campaign, onClose, onInvite }) => {
       // Simulate API call
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      const selectedFriendNames = MOCK_FRIENDS
+      const selectedFriendNames = volunteers
         .filter((f) => selectedFriends.includes(f.id))
         .map((f) => f.name);
 
@@ -57,7 +73,7 @@ const FriendInviteModal = ({ campaign, onClose, onInvite }) => {
     }
   };
 
-  const selectedFriendsData = MOCK_FRIENDS.filter((f) => selectedFriends.includes(f.id));
+  const selectedFriendsData = volunteers.filter((f) => selectedFriends.includes(f.id));
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 overflow-y-auto safe-area-inset">
