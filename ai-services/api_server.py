@@ -188,32 +188,46 @@ async def startup_event():
         print("\n⚠️  WARNING: Some API keys are not configured")
         print("The server will start but some features may not work")
     
-    # Initialize services
+    # Initialize services with graceful error handling
+    print("\n📦 Initializing services...")
+    
+    # Embedder (loads ML model from cache)
     try:
-        print("\n📦 Initializing services...")
-        
-        # Embedder (loads ML model)
+        print("  → Loading embedding model...")
         embedder = EmbeddingGenerator()
-        
-        # Qdrant (connects to cloud)
-        vector_store = EcoSynkVectorStore()
-        vector_store.setup_collections(recreate=False)
-        
-        # Gemini (API client)
-        try:
-            analyzer = TrashAnalyzer()
-        except ValueError as e:
-            print(f"⚠️  Gemini not configured: {e}")
-            analyzer = None
-        
-        print("\n✅ All services initialized!")
-        print(f"📡 API server running at http://{settings.api_host}:{settings.api_port}")
-        print(f"📚 Documentation: http://localhost:{settings.api_port}/docs")
-        print("=" * 60 + "\n")
-        
+        print("  ✅ Embedder ready")
     except Exception as e:
-        print(f"\n❌ Failed to initialize services: {e}")
-        raise
+        print(f"  ⚠️  Embedder failed: {e}")
+        embedder = None
+    
+    # Qdrant (connects to cloud) - don't block startup if this fails
+    try:
+        print("  → Connecting to Qdrant...")
+        vector_store = EcoSynkVectorStore()
+        print("  → Setting up collections...")
+        vector_store.setup_collections(recreate=False)
+        print("  ✅ Qdrant ready")
+    except Exception as e:
+        print(f"  ⚠️  Qdrant connection failed: {e}")
+        print("  ⚠️  Vector search features will not work")
+        vector_store = None
+    
+    # Gemini (API client)
+    try:
+        print("  → Initializing Gemini API...")
+        analyzer = TrashAnalyzer()
+        print("  ✅ Gemini ready")
+    except ValueError as e:
+        print(f"  ⚠️  Gemini not configured: {e}")
+        analyzer = None
+    except Exception as e:
+        print(f"  ⚠️  Gemini failed: {e}")
+        analyzer = None
+    
+    print("\n✅ Server startup complete!")
+    print(f"📡 API endpoints available at http://{settings.api_host}:{settings.api_port}")
+    print(f"📚 Documentation: http://{settings.api_host}:{settings.api_port}/docs")
+    print("=" * 60 + "\n")
 
 
 @app.on_event("shutdown")

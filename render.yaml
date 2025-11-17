@@ -22,6 +22,6 @@ services:
         value: INFO
       - key: ALLOWED_ORIGINS
         value: "*"
-      - key: TRANSFORMERS_CACHE
+      - key: HF_HOME
         value: /opt/render/project/src/.cache
     healthCheckPath: /health
