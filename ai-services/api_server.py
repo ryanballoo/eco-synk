@@ -6,11 +6,14 @@ Provides endpoints for Opus workflows and frontend integration
 import os
 import json
 import uuid
-from datetime import datetime, timedelta
+import math
+import tempfile
+import traceback
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Body
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -113,6 +116,58 @@ app.add_middleware(
 analyzer: Optional[TrashAnalyzer] = None
 vector_store: Optional[EcoSynkVectorStore] = None
 embedder: Optional[EmbeddingGenerator] = None
+
+
+def _normalize_payload_location(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    """Extract a normalized lat/lon dict from a payload."""
+    if not payload:
+        return None
+
+    location = payload.get('location') or payload.get('metadata', {}).get('location') or {}
+    lat = (
+        location.get('lat') or
+        location.get('latitude')
+    )
+    lon = (
+        location.get('lon') or
+        location.get('lng') or
+        location.get('longitude')
+    )
+
+    try:
+        if lat is None or lon is None:
+            return None
+        lat_val = float(lat)
+        lon_val = float(lon)
+    except (TypeError, ValueError):
+        return None
+
+    return {"lat": lat_val, "lon": lon_val}
+
+
+def _calculate_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Haversine distance in kilometers between two coordinates."""
+    radius = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return radius * c
+
+
+def _parse_timestamp(candidate: Optional[str]) -> Optional[datetime]:
+    """Parse ISO timestamp strings into aware datetime objects."""
+    if not candidate:
+        return None
+    try:
+        parsed = datetime.fromisoformat(candidate.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -231,13 +286,13 @@ async def analyze_trash(
         if location:
             location_data = json.loads(location)
         
-        # Save uploaded file temporarily
-        temp_dir = Path("/tmp/ecosynk")
-        temp_dir.mkdir(exist_ok=True)
-        
+        # Save uploaded file temporarily (cross-platform)
         file_extension = Path(file.filename).suffix or ".jpg"
-        temp_path = temp_dir / f"upload_{uuid.uuid4().hex}{file_extension}"
+        temp_fd, temp_path_str = tempfile.mkstemp(suffix=file_extension, prefix="ecosynk_upload_")
+        temp_path = Path(temp_path_str)
         
+        # Close the file descriptor and write the uploaded content
+        os.close(temp_fd)
         with open(temp_path, "wb") as f:
             content = await file.read()
             f.write(content)
@@ -278,9 +333,13 @@ async def analyze_trash(
             "message": "Trash report analyzed and stored successfully"
         }
         
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON decode error: {e}")
         raise HTTPException(status_code=400, detail="Invalid location JSON")
     except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"❌ Analysis failed: {str(e)}")
+        print(f"Stack trace:\n{error_trace}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 
@@ -922,6 +981,155 @@ async def update_volunteer_availability(user_id: str, available: bool):
         raise HTTPException(status_code=500, detail=f"Failed to update availability: {str(e)}")
 
 
+@app.get("/volunteers")
+async def list_volunteers(
+    limit: int = Query(100, ge=1, le=500),
+    lat: Optional[float] = Query(None, description="Latitude for proximity filtering"),
+    lon: Optional[float] = Query(None, description="Longitude for proximity filtering"),
+    radius_km: float = Query(25.0, ge=0.1, le=500.0, description="Radius for distance filter"),
+    available_only: bool = Query(False, description="Return only active volunteers"),
+):
+    """Return volunteer profiles with optional geo filtering."""
+    try:
+        if vector_store is None:
+            raise HTTPException(status_code=503, detail="Vector store not initialized")
+
+        reference_location = None
+        if lat is not None and lon is not None:
+            reference_location = {"lat": lat, "lon": lon}
+
+        fetch_limit = min(max(limit * 2, 100), 512)
+        results = vector_store.client.scroll(
+            collection_name=settings.volunteer_profiles_collection,
+            limit=fetch_limit,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        volunteers: List[Dict[str, Any]] = []
+        for point in results[0]:
+            payload = point.payload or {}
+            location = _normalize_payload_location(payload)
+
+            if available_only and not payload.get('available', True):
+                continue
+
+            distance = None
+            if reference_location and location:
+                distance = _calculate_distance_km(
+                    reference_location['lat'],
+                    reference_location['lon'],
+                    location['lat'],
+                    location['lon']
+                )
+                if radius_km and distance > radius_km:
+                    continue
+
+            volunteer_entry = payload.copy()
+            volunteer_entry.setdefault('user_id', str(point.id))
+            if distance is not None:
+                volunteer_entry['distance_km'] = round(distance, 2)
+
+            volunteers.append(volunteer_entry)
+
+        volunteers.sort(key=lambda v: v.get('past_cleanup_count', 0), reverse=True)
+        volunteers = volunteers[:limit]
+
+        return {
+            "status": "success",
+            "count": len(volunteers),
+            "volunteers": volunteers,
+            "filters": {
+                "lat": lat,
+                "lon": lon,
+                "radius_km": radius_km if reference_location else None,
+                "available_only": available_only
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list volunteers: {str(e)}")
+
+
+@app.get("/trash-reports")
+async def list_trash_reports(
+    limit: int = Query(50, ge=1, le=500),
+    lat: Optional[float] = Query(None, description="Latitude for proximity filtering"),
+    lon: Optional[float] = Query(None, description="Longitude for proximity filtering"),
+    radius_km: float = Query(25.0, ge=0.1, le=500.0, description="Radius for distance filter")
+):
+    """Return recent trash reports ordered by timestamp."""
+    try:
+        if vector_store is None:
+            raise HTTPException(status_code=503, detail="Vector store not initialized")
+
+        reference_location = None
+        if lat is not None and lon is not None:
+            reference_location = {"lat": lat, "lon": lon}
+
+        fetch_limit = min(max(limit * 2, 100), 512)
+        results = vector_store.client.scroll(
+            collection_name=settings.trash_reports_collection,
+            limit=fetch_limit,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        reports: List[Dict[str, Any]] = []
+        for point in results[0]:
+            payload = point.payload or {}
+            location = _normalize_payload_location(payload)
+
+            distance = None
+            if reference_location and location:
+                distance = _calculate_distance_km(
+                    reference_location['lat'],
+                    reference_location['lon'],
+                    location['lat'],
+                    location['lon']
+                )
+                if radius_km and distance > radius_km:
+                    continue
+
+            timestamp = (
+                payload.get('timestamp') or
+                payload.get('metadata', {}).get('analyzed_at') or
+                payload.get('metadata', {}).get('timestamp')
+            )
+
+            report_entry = payload.copy()
+            if distance is not None:
+                report_entry['distance_km'] = round(distance, 2)
+            if timestamp:
+                report_entry['timestamp'] = timestamp
+
+            reports.append(report_entry)
+
+        reports.sort(
+            key=lambda report: _parse_timestamp(report.get('timestamp')) or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True
+        )
+        reports = reports[:limit]
+
+        return {
+            "status": "success",
+            "count": len(reports),
+            "reports": reports,
+            "filters": {
+                "lat": lat,
+                "lon": lon,
+                "radius_km": radius_km if reference_location else None
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list trash reports: {str(e)}")
+
+
 @app.get("/leaderboard")
 async def get_leaderboard(limit: int = 10):
     """
@@ -1057,15 +1265,27 @@ async def get_campaign(campaign_id: str):
 # ============================================================================
 
 if __name__ == "__main__":
+    import os
+    from pathlib import Path
+    
+    # Get absolute paths to certificate files
+    base_dir = Path(__file__).parent
+    cert_file = base_dir / "cert.pem"
+    key_file = base_dir / "key.pem"
+    
     print("\n🚀 Starting EcoSynk AI Services API Server...")
-    print(f"📡 Server will be available at: http://localhost:{settings.api_port}")
-    print(f"📚 API Documentation: http://localhost:{settings.api_port}/docs\n")
+    print(f"📡 Server will be available at: https://localhost:{settings.api_port}")
+    print(f"📚 API Documentation: https://localhost:{settings.api_port}/docs")
+    print(f"🔒 SSL Certificate: {cert_file}")
+    print(f"🔑 SSL Key: {key_file}\n")
     
     uvicorn.run(
         "api_server:app",
         host=settings.api_host,
         port=settings.api_port,
         reload=settings.debug,
-        log_level="info"
+        log_level="info",
+        ssl_keyfile=str(key_file),
+        ssl_certfile=str(cert_file)
     )
 

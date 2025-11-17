@@ -1,405 +1,414 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
-  Flex,
   VStack,
   HStack,
+  Text,
+  Heading,
   Button,
+  IconButton,
+  Spinner,
+  useToast,
+  Container,
   Card,
   CardBody,
   Badge,
-  Icon,
-  Text,
-  Heading,
-  Container,
-  Grid,
-  GridItem,
+  SimpleGrid,
   Stat,
   StatLabel,
   StatNumber,
-  Progress,
+  Alert,
+  AlertIcon,
 } from '@chakra-ui/react';
-import { FiMapPin, FiChevronDown, FiChevronUp, FiAlertTriangle, FiClock, FiCheckCircle } from 'react-icons/fi';
+import { FiMaximize2, FiMinimize2, FiMapPin, FiRefreshCw, FiCalendar, FiUsers } from 'react-icons/fi';
+import MapView from './map/MapView';
 
-const TRASH_REPORTS = [
-  {
-    id: 1,
-    location: 'Central Park',
-    priority: 'high',
-    description: 'Large pile of plastic waste near the fountain area. Multiple water bottles, food packaging, and plastic bags observed.',
-    date: '2 hours ago',
-    reports: 12,
-    status: 'pending',
-    distance: '0.8 km',
-    volunteersNeeded: 5,
-    materials: ['Plastic', 'Glass', 'Organic']
-  },
-  {
-    id: 2,
-    location: 'Main Street Downtown',
-    priority: 'medium',
-    description: 'Scattered litter along the sidewalk and bus stops. Mostly paper and food wrappers.',
-    date: '4 hours ago',
-    reports: 5,
-    status: 'in-progress',
-    distance: '1.2 km',
-    volunteersNeeded: 3,
-    materials: ['Paper', 'Food Waste']
-  },
-  {
-    id: 3,
-    location: 'Ocean Beach',
-    priority: 'high',
-    description: 'Marine debris including fishing nets, plastic bottles, and styrofoam containers washed ashore.',
-    date: '6 hours ago',
-    reports: 18,
-    status: 'pending',
-    distance: '2.5 km',
-    volunteersNeeded: 8,
-    materials: ['Plastic', 'Fishing Gear', 'Styrofoam']
-  },
-  {
-    id: 4,
-    location: 'Riverside Park',
-    priority: 'low',
-    description: 'Minor litter in picnic areas. Mostly organic waste and some paper products.',
-    date: '1 day ago',
-    reports: 3,
-    status: 'completed',
-    distance: '1.8 km',
-    volunteersNeeded: 2,
-    materials: ['Organic', 'Paper']
-  },
-];
-
-const PRIORITY_COLORS = {
-  high: 'red',
-  medium: 'orange',
-  low: 'blue',
-};
-
-const STATUS_COLORS = {
-  pending: 'gray',
-  'in-progress': 'brand',
-  completed: 'green',
-};
-
-const STATUS_ICONS = {
-  pending: FiClock,
-  'in-progress': FiAlertTriangle,
-  completed: FiCheckCircle,
-};
+import campaignService from '../services/campaignService';
+import { normalizeCampaignList } from '../utils/campaignFormatter';
 
 const MapPage = () => {
-  const [selectedFilter, setSelectedFilter] = useState('all');
-  const [expandedId, setExpandedId] = useState(null);
-  const [showHeader, setShowHeader] = useState(true);
-  const lastScrollYRef = React.useRef(0);
-  const scrollTimeoutRef = React.useRef(null);
+  const [campaigns, setCampaigns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedCampaign, setSelectedCampaign] = useState(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [error, setError] = useState(null);
+  const [warning, setWarning] = useState(null);
+  const [dataSource, setDataSource] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const toast = useToast();
 
-  // Simplified scroll handler with debouncing
-  const handleScroll = React.useCallback((e) => {
-    const currentScrollY = e.target.scrollTop;
-    
-    // Clear existing timeout
-    if (scrollTimeoutRef.current) {
-      clearTimeout(scrollTimeoutRef.current);
-    }
-    
-    // Simple logic: show header when near top, hide when scrolling down significantly
-    if (currentScrollY < 50) {
-      setShowHeader(true);
-    } else if (currentScrollY > 150 && currentScrollY > lastScrollYRef.current + 5) {
-      setShowHeader(false);
-    } else if (currentScrollY < lastScrollYRef.current - 20) {
-      setShowHeader(true);
-    }
-    
-    // Debounced update
-    scrollTimeoutRef.current = setTimeout(() => {
-      lastScrollYRef.current = currentScrollY;
-    }, 50);
-  }, []);
+  const loadCampaigns = useCallback(
+    async ({ forceRefresh = false } = {}) => {
+      setError(null);
+      setWarning(null);
 
-  const filteredReports = TRASH_REPORTS.filter((report) => {
-    if (selectedFilter === 'all') return true;
-    return report.priority === selectedFilter;
-  });
+      if (forceRefresh) {
+        setIsRefreshing(true);
+      } else {
+        setLoading(true);
+      }
 
-  const toggleExpand = (id) => {
-    setExpandedId(expandedId === id ? null : id);
+      try {
+        const response = await campaignService.getAllCampaigns({ limit: 200, forceRefresh });
+        if (!response.success) {
+          throw new Error(response.error || 'Unable to load campaigns');
+        }
+
+        const normalized = normalizeCampaignList(response.campaigns || []);
+        const hydrated = normalized.filter(
+          (campaign) => typeof campaign.location?.lat === 'number' && typeof campaign.location?.lng === 'number'
+        );
+
+        setCampaigns(hydrated);
+        setDataSource(response.source);
+        setLastUpdated(new Date());
+        if (response.warning) {
+          setWarning(response.warning);
+        }
+      } catch (err) {
+        console.error('Error loading campaigns:', err);
+        setError(err.message || 'Failed to load campaign data');
+        toast({
+          title: 'Error loading campaigns',
+          description: err.message || 'Failed to load campaign data',
+          status: 'error',
+          duration: 3000,
+          isClosable: true,
+        });
+      } finally {
+        setLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    [toast]
+  );
+
+  useEffect(() => {
+    loadCampaigns();
+  }, [loadCampaigns]);
+
+  const handleRefresh = () => {
+    loadCampaigns({ forceRefresh: true });
+  };
+
+  // Handle campaign selection from map
+  const handleCampaignSelect = (campaign) => {
+    setSelectedCampaign(campaign);
+  };
+
+  // Handle campaign join action
+  const handleCampaignJoin = (campaign) => {
+    toast({
+      title: 'Campaign joined!',
+      description: `You've successfully joined "${campaign.title}"`,
+      status: 'success',
+      duration: 3000,
+      isClosable: true,
+    });
+  };
+
+  // Handle view campaign details
+  const handleCampaignView = (campaign) => {
+    setSelectedCampaign(campaign);
+    toast({
+      title: 'Campaign details',
+      description: `Viewing details for "${campaign.title}"`,
+      status: 'info',
+      duration: 2000,
+      isClosable: true,
+    });
+  };
+
+  // Handle view change (not needed for map-only page, but required by MapView)
+  const handleViewChange = (view) => {
+    // Map page only shows map view, no list toggle needed
+    console.log('View change:', view);
+  };
+
+  // Toggle fullscreen mode
+  const toggleFullscreen = () => {
+    setIsFullscreen(!isFullscreen);
   };
 
   // Calculate stats
-  const stats = {
-    total: TRASH_REPORTS.length,
-    highPriority: TRASH_REPORTS.filter(r => r.priority === 'high').length,
-    inProgress: TRASH_REPORTS.filter(r => r.status === 'in-progress').length,
-    completed: TRASH_REPORTS.filter(r => r.status === 'completed').length,
-  };
+  const stats = useMemo(() => ({
+    total: campaigns.length,
+    active: campaigns.filter((c) => c.status === 'active').length,
+    volunteers: campaigns.reduce((sum, c) => sum + (c.volunteers?.length || 0), 0),
+    funding: campaigns.reduce((sum, c) => sum + (c.funding?.current || 0), 0),
+  }), [campaigns]);
 
-  return (
-    <Flex direction="column" h="full" bg="gray.50" overflow="hidden" overflowX="hidden">
-      {/* Header - Collapsible */}
-      <Box 
-        bg="white" 
-        p={4} 
-        borderBottom="1px solid" 
-        borderColor="gray.200" 
-        shadow="sm"
-        position="fixed"
-        top={0}
-        left={0}
-        right={0}
-        transform={showHeader ? "translateY(0)" : "translateY(-100%)"}
-        transition="transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
-        zIndex={20}
-      >
-        <Container maxW="container.lg" px={0}>
-          <HStack justify="space-between" align="center" mb={4}>
-            <HStack spacing={3}>
-              <Box
-                bg="brand.50"
-                p={2}
-                borderRadius="lg"
-              >
-                <Icon as={FiMapPin} boxSize={5} color="brand.600" />
-              </Box>
-              <VStack align="start" spacing={0}>
-                <Heading size="lg" color="gray.900" fontWeight="bold">
-                  Trash Map
-                </Heading>
-                <Text fontSize="sm" color="gray.600">
-                  Live reports in your area
-                </Text>
-              </VStack>
-            </HStack>
-            <Badge colorScheme="brand" fontSize="sm" px={3} py={1} borderRadius="full">
-              {filteredReports.length} active
-            </Badge>
-          </HStack>
-
-          {/* Quick Stats */}
-          <Grid templateColumns="repeat(4, 1fr)" gap={3} mb={4}>
-            <Stat textAlign="center" p={2} bg="gray.50" borderRadius="lg">
-              <StatNumber fontSize="lg" color="gray.900">{stats.total}</StatNumber>
-              <StatLabel fontSize="xs" color="gray.600">Total</StatLabel>
-            </Stat>
-            <Stat textAlign="center" p={2} bg="red.50" borderRadius="lg">
-              <StatNumber fontSize="lg" color="red.600">{stats.highPriority}</StatNumber>
-              <StatLabel fontSize="xs" color="red.600">High</StatLabel>
-            </Stat>
-            <Stat textAlign="center" p={2} bg="brand.50" borderRadius="lg">
-              <StatNumber fontSize="lg" color="brand.600">{stats.inProgress}</StatNumber>
-              <StatLabel fontSize="xs" color="brand.600">Active</StatLabel>
-            </Stat>
-            <Stat textAlign="center" p={2} bg="green.50" borderRadius="lg">
-              <StatNumber fontSize="lg" color="green.600">{stats.completed}</StatNumber>
-              <StatLabel fontSize="xs" color="green.600">Done</StatLabel>
-            </Stat>
-          </Grid>
-
-          {/* Filter Buttons */}
-          <HStack spacing={2} flex="1" overflowX="hidden" pb={1} flexWrap="wrap">
-            {[
-              { key: 'all', label: 'All Reports', color: 'gray' },
-              { key: 'high', label: 'High Priority', color: 'red' },
-              { key: 'medium', label: 'Medium', color: 'orange' },
-              { key: 'low', label: 'Low', color: 'blue' },
-            ].map((filter) => (
-              <Button
-                key={filter.key}
-                size="sm"
-                variant={selectedFilter === filter.key ? 'solid' : 'outline'}
-                colorScheme={filter.color}
-                onClick={() => setSelectedFilter(filter.key)}
-                borderRadius="full"
-                fontSize="xs"
-                fontWeight="medium"
-              >
-                {filter.label}
-              </Button>
-            ))}
-          </HStack>
-        </Container>
-      </Box>
-
-      {/* Reports List */}
-      <Box 
-        flex="1" 
-        overflowY="auto"
-        overflowX="hidden"
-        pb={20} 
-        onScroll={handleScroll} 
-        pt={showHeader ? "240px" : "80px"} 
-        transition="padding-top 0.4s ease-out"
-      >
-        <Container maxW="container.lg" py={4}>
-          <VStack spacing={3} align="stretch">
-            {filteredReports.map((report) => (
-              <Card
-                key={report.id}
-                bg="white"
-                border="1px solid"
-                borderColor="gray.200"
-                shadow="sm"
-                _hover={{ shadow: 'md', transform: 'translateY(-1px)' }}
-                transition="all 0.2s"
-                cursor="pointer"
-                onClick={() => toggleExpand(report.id)}
-              >
-                <CardBody p={4}>
-                  <Flex justify="space-between" align="start" gap={4}>
-                    <VStack align="start" flex="1" spacing={3}>
-                      {/* Header Row */}
-                      <HStack justify="space-between" w="full">
-                        <HStack spacing={3}>
-                          <Box
-                            bg={`${PRIORITY_COLORS[report.priority]}.100`}
-                            p={2}
-                            borderRadius="lg"
-                          >
-                            <Icon 
-                              as={FiMapPin} 
-                              boxSize={4} 
-                              color={`${PRIORITY_COLORS[report.priority]}.600`} 
-                            />
-                          </Box>
-                          <VStack align="start" spacing={0}>
-                            <Heading size="sm" color="gray.900" fontWeight="semibold">
-                              {report.location}
-                            </Heading>
-                            <Text fontSize="xs" color="gray.500">
-                              {report.distance} away • {report.date}
-                            </Text>
-                          </VStack>
-                        </HStack>
-                        
-                        <HStack spacing={2}>
-                          <Badge 
-                            colorScheme={PRIORITY_COLORS[report.priority]} 
-                            fontSize="xs"
-                            borderRadius="full"
-                          >
-                            {report.priority}
-                          </Badge>
-                          <Badge
-                            colorScheme={STATUS_COLORS[report.status]}
-                            fontSize="xs"
-                            variant="subtle"
-                            borderRadius="full"
-                          >
-                            <Icon as={STATUS_ICONS[report.status]} mr={1} boxSize={3} />
-                            {report.status}
-                          </Badge>
-                        </HStack>
-                      </HStack>
-
-                      {/* Stats Row */}
-                      <HStack spacing={4} fontSize="sm" color="gray.600" w="full">
-                        <HStack spacing={1}>
-                          <Text fontWeight="600" color="brand.600">
-                            {report.reports}
-                          </Text>
-                          <Text>reports</Text>
-                        </HStack>
-                        <HStack spacing={1}>
-                          <Text fontWeight="600" color="orange.600">
-                            {report.volunteersNeeded}
-                          </Text>
-                          <Text>volunteers needed</Text>
-                        </HStack>
-                      </HStack>
-
-                      {/* Materials */}
-                      <HStack spacing={2}>
-                        {report.materials.map((material, index) => (
-                          <Badge
-                            key={index}
-                            colorScheme="gray"
-                            variant="subtle"
-                            fontSize="xs"
-                            borderRadius="md"
-                          >
-                            {material}
-                          </Badge>
-                        ))}
-                      </HStack>
-
-                      {/* Expanded Content */}
-                      {expandedId === report.id && (
-                        <Box
-                          p={4}
-                          bg="gray.50"
-                          borderRadius="lg"
-                          borderLeft="4px solid"
-                          borderLeftColor="brand.500"
-                          mt={2}
-                          w="full"
-                        >
-                          <Text color="gray.700" fontSize="sm" mb={3} lineHeight="tall">
-                            {report.description}
-                          </Text>
-                          
-                          <Progress 
-                            value={report.status === 'completed' ? 100 : report.status === 'in-progress' ? 50 : 10} 
-                            colorScheme="brand" 
-                            size="sm" 
-                            borderRadius="full"
-                            mb={3}
-                          />
-                          
-                          <HStack spacing={2} justify="space-between">
-                            <Button size="sm" colorScheme="brand" variant="solid" flex="1">
-                              Join Cleanup
-                            </Button>
-                            <Button size="sm" colorScheme="gray" variant="outline" flex="1">
-                              Share Location
-                            </Button>
-                            <Button size="sm" colorScheme="green" variant="ghost" flex="1">
-                              +25 pts
-                            </Button>
-                          </HStack>
-                        </Box>
-                      )}
-                    </VStack>
-
-                    <Button 
-                      size="sm" 
-                      variant="ghost" 
-                      colorScheme="gray" 
-                      p={1} 
-                      minW="auto"
-                      borderRadius="full"
-                    >
-                      {expandedId === report.id ? (
-                        <Icon as={FiChevronUp} boxSize={5} />
-                      ) : (
-                        <Icon as={FiChevronDown} boxSize={5} />
-                      )}
-                    </Button>
-                  </Flex>
-                </CardBody>
-              </Card>
-            ))}
+  if (loading) {
+    return (
+      <Container maxW="container.xl" py={8}>
+        <VStack spacing={6} align="center" justify="center" h="50vh">
+          <Spinner size="xl" color="brand.500" thickness="4px" />
+          <VStack spacing={2} textAlign="center">
+            <Heading size="md" color="gray.700">
+              Loading campaign map...
+            </Heading>
+            <Text color="gray.500">
+              Fetching cleanup campaigns in your area
+            </Text>
           </VStack>
+        </VStack>
+      </Container>
+    );
+  }
 
-          {/* Empty State */}
-          {filteredReports.length === 0 && (
-            <VStack spacing={4} py={12} textAlign="center" color="gray.500">
-              <Icon as={FiCheckCircle} boxSize={12} color="green.400" />
-              <VStack spacing={1}>
-                <Text fontWeight="semibold" fontSize="lg">No reports found</Text>
-                <Text fontSize="sm">Great job! Your area looks clean.</Text>
-              </VStack>
-              <Button colorScheme="brand" size="md">
-                Report First Trash
-              </Button>
-            </VStack>
-          )}
-        </Container>
+  // Fullscreen view
+  if (isFullscreen) {
+    return (
+      <Box position="fixed" top="0" left="0" right="0" bottom="0" zIndex="1400" bg="white">
+        {/* Fullscreen close button */}
+        <IconButton
+          icon={<FiMinimize2 />}
+          position="absolute"
+          top="20px"
+          right="20px"
+          zIndex="1500"
+          colorScheme="red"
+          variant="solid"
+          size="md"
+          borderRadius="full"
+          boxShadow="xl"
+          onClick={toggleFullscreen}
+          aria-label="Exit fullscreen"
+          _hover={{
+            transform: 'scale(1.05)',
+            boxShadow: '2xl'
+          }}
+        />
+        
+        <Box height="100%" width="100%">
+          <MapView
+            campaigns={campaigns}
+            onCampaignSelect={handleCampaignSelect}
+            onCampaignJoin={handleCampaignJoin}
+            onCampaignView={handleCampaignView}
+            onViewChange={handleViewChange}
+          />
+        </Box>
       </Box>
-    </Flex>
+    );
+  }
+
+  // Normal view with sidebar
+  return (
+    <Box 
+      w="100%" 
+      minH="calc(100vh - 80px)" // Minimum height to fill screen minus nav
+      overflowX="hidden"
+      pb="80px" // Account for bottom navigation
+      px={4}
+      py={6}
+    >
+      <VStack spacing={6} align="stretch" maxW="container.xl" mx="auto">
+        {/* Header */}
+        <Box>
+          <HStack justify="space-between" align={{ base: 'flex-start', md: 'center' }} spacing={4} flexWrap="wrap">
+            <Box>
+              <Heading size="lg" mb={1}>
+                Campaign Map
+              </Heading>
+              <Text color="gray.600">
+                Discover cleanup campaigns in your area and join the environmental movement
+              </Text>
+            </Box>
+            <Button
+              size="sm"
+              variant="outline"
+              leftIcon={<FiRefreshCw />}
+              onClick={handleRefresh}
+              isLoading={isRefreshing}
+            >
+              Refresh
+            </Button>
+          </HStack>
+
+          {(dataSource || lastUpdated) && (
+            <HStack spacing={3} mt={2} color="gray.500" fontSize="sm">
+              {dataSource && (
+                <Badge colorScheme={dataSource === 'local-cache' ? 'yellow' : 'green'}>
+                  {dataSource === 'network' ? 'Live from Qdrant' : dataSource}
+                </Badge>
+              )}
+              {lastUpdated && (
+                <Text>
+                  Updated {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              )}
+            </HStack>
+          )}
+        </Box>
+
+        {(error || warning) && (
+          <Box>
+            {error && (
+              <Alert status="error" borderRadius="lg" mb={warning ? 3 : 0}>
+                <AlertIcon />
+                {error}
+              </Alert>
+            )}
+            {warning && (
+              <Alert status="warning" borderRadius="lg">
+                <AlertIcon />
+                {warning}
+              </Alert>
+            )}
+          </Box>
+        )}
+
+        {/* Stats */}
+        <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4}>
+          <Stat bg="white" p={4} borderRadius="lg" boxShadow="sm">
+            <StatLabel>Total Campaigns</StatLabel>
+            <StatNumber color="brand.600">{stats.total}</StatNumber>
+          </Stat>
+          <Stat bg="white" p={4} borderRadius="lg" boxShadow="sm">
+            <StatLabel>Active</StatLabel>
+            <StatNumber color="green.600">{stats.active}</StatNumber>
+          </Stat>
+          <Stat bg="white" p={4} borderRadius="lg" boxShadow="sm">
+            <StatLabel>Volunteers</StatLabel>
+            <StatNumber color="blue.600">{stats.volunteers}</StatNumber>
+          </Stat>
+          <Stat bg="white" p={4} borderRadius="lg" boxShadow="sm">
+            <StatLabel>Funding</StatLabel>
+            <StatNumber color="purple.600">AED {Math.round(stats.funding / 1000)}K</StatNumber>
+          </Stat>
+        </SimpleGrid>
+
+        {/* Map Section */}
+        <Card>
+          <CardBody p={0} position="relative">
+            {/* Map header with fullscreen button */}
+            <HStack justify="space-between" p={4} borderBottom="1px solid" borderColor="gray.200">
+              <HStack spacing={2}>
+                <FiMapPin />
+                <Text fontWeight="semibold">Campaign Locations</Text>
+                <Badge colorScheme="brand" variant="subtle">
+                  {campaigns.length} locations
+                </Badge>
+                {isRefreshing && <Spinner size="sm" color="brand.500" ml={2} />}
+              </HStack>
+              <Button
+                leftIcon={<FiMaximize2 />}
+                size="sm"
+                variant="outline"
+                colorScheme="brand"
+                onClick={toggleFullscreen}
+              >
+                Fullscreen
+              </Button>
+            </HStack>
+            
+            {/* Map container - smaller height for normal view */}
+            <Box 
+              height="350px" 
+              position="relative"
+              overflow="hidden"
+              borderBottomRadius="md"
+              isolation="isolate"
+            >
+              <MapView
+                campaigns={campaigns}
+                onCampaignSelect={handleCampaignSelect}
+                onCampaignJoin={handleCampaignJoin}
+                onCampaignView={handleCampaignView}
+                onViewChange={handleViewChange}
+                isConstrained={true}
+              />
+            </Box>
+          </CardBody>
+        </Card>
+
+        {/* Selected Campaign Details */}
+        {selectedCampaign && (
+          <Card>
+            <CardBody>
+              <VStack spacing={4} align="stretch">
+                <HStack justify="space-between">
+                  <HStack spacing={3}>
+                    <Text fontSize="2xl">{selectedCampaign.image}</Text>
+                    <VStack align="start" spacing={1}>
+                      <Heading size="md">{selectedCampaign.title}</Heading>
+                      <Text color="gray.600" fontSize="sm">
+                        {selectedCampaign.location.address}
+                      </Text>
+                    </VStack>
+                  </HStack>
+                  <Badge colorScheme="brand" variant="solid">
+                    {selectedCampaign.difficulty}
+                  </Badge>
+                </HStack>
+
+                <Text color="gray.700">
+                  {selectedCampaign.description}
+                </Text>
+
+                <SimpleGrid columns={{ base: 1, md: 3 }} spacing={4}>
+                  <HStack spacing={2}>
+                    <FiCalendar />
+                    <Text fontSize="sm">
+                      {new Date(selectedCampaign.date).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </Text>
+                  </HStack>
+                  <HStack spacing={2}>
+                    <FiUsers />
+                    <Text fontSize="sm">
+                      {selectedCampaign.volunteers.length}/{selectedCampaign.volunteerGoal} volunteers
+                    </Text>
+                  </HStack>
+                  <HStack spacing={2}>
+                    <Text fontSize="sm">
+                      💰 AED {selectedCampaign.funding.current.toLocaleString()}/{selectedCampaign.funding.goal.toLocaleString()}
+                    </Text>
+                  </HStack>
+                </SimpleGrid>
+
+                <HStack spacing={3}>
+                  <Button colorScheme="brand" size="sm" flex={1}>
+                    Join Campaign
+                  </Button>
+                  <Button variant="outline" size="sm" flex={1}>
+                    View Details
+                  </Button>
+                </HStack>
+              </VStack>
+            </CardBody>
+          </Card>
+        )}
+
+        {/* Quick Actions */}
+        <Card>
+          <CardBody>
+            <VStack spacing={4}>
+              <Heading size="md" textAlign="center">
+                Join the Movement
+              </Heading>
+              <Text textAlign="center" color="gray.600">
+                Every cleanup makes a difference. Find a campaign near you and help create a cleaner, greener Dubai.
+              </Text>
+              <HStack spacing={3} justify="center">
+                <Button colorScheme="brand" leftIcon={<FiMapPin />}>
+                  Find Nearby
+                </Button>
+                <Button variant="outline" leftIcon={<FiUsers />}>
+                  Create Campaign
+                </Button>
+              </HStack>
+            </VStack>
+          </CardBody>
+        </Card>
+      </VStack>
+    </Box>
   );
 };
 

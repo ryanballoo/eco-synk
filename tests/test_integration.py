@@ -6,6 +6,8 @@ Tests the complete workflow end-to-end
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add ai-services directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'ai-services'))
 
@@ -31,8 +33,7 @@ def test_complete_workflow():
         analyzer = TrashAnalyzer()
         print("✅ All services initialized")
     except Exception as e:
-        print(f"❌ Initialization failed: {e}")
-        return False
+        pytest.fail(f"Initialization failed: {e}")
     
     # Step 2: Create mock trash report
     print("\n[2/5] Creating mock trash report...")
@@ -51,10 +52,10 @@ def test_complete_workflow():
     print("\n[3/5] Generating embedding...")
     try:
         embedding = embedder.generate_trash_report_embedding(mock_report)
+        assert embedding, "Embedding generator returned empty output"
         print(f"✅ Embedding generated: {len(embedding)} dimensions")
     except Exception as e:
-        print(f"❌ Embedding failed: {e}")
-        return False
+        pytest.fail(f"Embedding failed: {e}")
     
     # Step 4: Store in Qdrant
     print("\n[4/5] Storing in Qdrant...")
@@ -63,10 +64,10 @@ def test_complete_workflow():
             embedding=embedding,
             metadata=mock_report
         )
+        assert report_id, "Vector store did not return a report ID"
         print(f"✅ Stored with ID: {report_id}")
     except Exception as e:
-        print(f"❌ Storage failed: {e}")
-        return False
+        pytest.fail(f"Storage failed: {e}")
     
     # Step 5: Search for similar reports
     print("\n[5/5] Searching for similar reports...")
@@ -75,18 +76,21 @@ def test_complete_workflow():
             embedding=embedding,
             limit=5
         )
+        assert isinstance(similar, list), "Vector store did not return a list"
         print(f"✅ Found {len(similar)} similar reports")
     except Exception as e:
-        print(f"❌ Search failed: {e}")
-        return False
+        pytest.fail(f"Search failed: {e}")
     
     print("\n" + "=" * 60)
     print("✅ ALL TESTS PASSED!")
     print("=" * 60)
-    return True
 
 
 if __name__ == "__main__":
-    success = test_complete_workflow()
-    sys.exit(0 if success else 1)
+    try:
+        test_complete_workflow()
+    except Exception as exc:  # pytest.fail raises a Failed exception that subclasses Exception
+        print(f"❌ Workflow test failed: {exc}")
+        sys.exit(1)
+    sys.exit(0)
 

@@ -69,6 +69,12 @@ web_modules/
 .env
 .env.*
 !.env.example
+!.env.template
+
+# AI Services specific environment files
+ai-services/.env
+ai-services/.env.*
+!ai-services/.env.template
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

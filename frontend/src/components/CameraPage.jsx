@@ -17,9 +17,13 @@ import {
   Center,
   Spinner,
   Divider,
+  Badge,
+  Alert,
+  AlertIcon,
+  useToast,
 } from '@chakra-ui/react';
-import { FiCamera, FiImage, FiStar } from 'react-icons/fi';
-import { analyzeTrashImage } from '../services/gemini';
+import { FiCamera, FiImage, FiStar, FiMapPin, FiUsers, FiAlertCircle } from 'react-icons/fi';
+import aiAnalysisService from '../services/aiAnalysis';
 
 const USER_STATS = {
   points: 420,
@@ -40,8 +44,13 @@ const CameraPage = () => {
   const [useFileUpload, setUseFileUpload] = useState(false);
   const [isFlashing, setIsFlashing] = useState(false);
   const [showHeader, setShowHeader] = useState(true);
+  const [userNotes, setUserNotes] = useState('');
+  const [volunteerMatches, setVolunteerMatches] = useState([]);
+  const [hotspotData, setHotspotData] = useState(null);
+  const [location, setLocation] = useState(null);
   const lastScrollYRef = useRef(0);
   const scrollTimeoutRef = useRef(null);
+  const toast = useToast();
 
   // Simplified scroll handler with debouncing
   const handleScroll = React.useCallback((e) => {
@@ -89,9 +98,32 @@ const CameraPage = () => {
         console.error('Error checking camera:', err);
       }
     };
+    
+    // Get user location for context
+    const getLocation = () => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            setLocation({
+              lat: position.coords.latitude,
+              lon: position.coords.longitude
+            });
+          },
+          (error) => {
+            console.warn('Location access denied:', error);
+            // Use Dubai default location
+            setLocation({ lat: 25.2048, lon: 55.2708 });
+          }
+        );
+      } else {
+        setLocation({ lat: 25.2048, lon: 55.2708 });
+      }
+    };
+    
     if (navigator.mediaDevices) {
       checkCamera();
     }
+    getLocation();
   }, []);
 
   const handleUserMedia = () => {
@@ -167,19 +199,86 @@ const CameraPage = () => {
     if (!capturedImage) return;
 
     setIsAnalyzing(true);
+    setAnalysisResult(null);
+    setVolunteerMatches([]);
+    setHotspotData(null);
 
     try {
-      const result = await analyzeTrashImage(capturedImage);
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      setAnalysisResult(result);
+      // Convert base64 to File object for the API
+      const response = await fetch(capturedImage);
+      const blob = await response.blob();
+      const file = new File([blob], 'trash-image.jpg', { type: 'image/jpeg' });
+
+      // Analyze image with AI
+      const analysisResponse = await aiAnalysisService.analyzeTrashImage(
+        file,
+        location,
+        userNotes || null
+      );
+
+      if (!analysisResponse.success) {
+        throw new Error(analysisResponse.error || 'Analysis failed');
+      }
+
+      const analysisData = analysisResponse.data;
+      setAnalysisResult(analysisData);
+
+      // Check for hotspot if location is available
+      if (location) {
+        const hotspotResponse = await aiAnalysisService.detectHotspot(analysisData);
+        if (hotspotResponse.success) {
+          setHotspotData(hotspotResponse);
+        }
+      }
+
+      // Find volunteer matches if priority is high enough
+      if (analysisData.cleanup_priority_score >= 6 && location) {
+        const volunteerResponse = await aiAnalysisService.findVolunteersForCleanup(
+          analysisData,
+          location,
+          { radius: 10, limit: 5, minScore: 0.3 }
+        );
+        
+        if (volunteerResponse.success) {
+          setVolunteerMatches(volunteerResponse.volunteers);
+        }
+      }
+
       setSubmitted(true);
-    } catch {
-      setAnalysisResult({
-        primary_material: 'Mixed Waste',
+      
+      toast({
+        title: 'Analysis complete',
+        description: `Found ${analysisData.primary_material} waste with priority ${analysisData.cleanup_priority_score}/10`,
+        status: 'success',
+        duration: 4000,
+        isClosable: true,
+      });
+
+    } catch (error) {
+      console.error('Analysis error:', error);
+      
+      // Fallback to mock data
+      const mockResult = {
+        primary_material: 'mixed',
+        estimated_volume: 'medium',
         cleanup_priority_score: 7,
         specific_items: ['Plastic bottle', 'Paper', 'Can'],
-      });
+        description: 'Mixed waste requiring cleanup',
+        environmental_risk_level: 'medium',
+        recyclable: true,
+        estimated_cleanup_time_minutes: 30
+      };
+      
+      setAnalysisResult(mockResult);
       setSubmitted(true);
+      
+      toast({
+        title: 'Analysis completed with fallback',
+        description: error.message || 'Using offline analysis',
+        status: 'warning',
+        duration: 4000,
+        isClosable: true,
+      });
     } finally {
       setIsAnalyzing(false);
     }
@@ -190,6 +289,9 @@ const CameraPage = () => {
     setAnalysisResult(null);
     setSubmitted(false);
     setCameraError(null);
+    setUserNotes('');
+    setVolunteerMatches([]);
+    setHotspotData(null);
   };
 
   return (
@@ -385,105 +487,263 @@ const CameraPage = () => {
             )}
 
             {submitted && analysisResult && !isAnalyzing && (
-              <Flex position="absolute" inset={0} bg="blackAlpha.800" align="center" justify="center" p={6}>
-                <Card bg="white" borderRadius="2xl" shadow="2xl" maxW="md" w="full">
-                  <CardBody p={6}>
-                    <VStack spacing={5} textAlign="center">
-                      <Box
-                        bg="green.100"
-                        p={3}
-                        borderRadius="full"
-                      >
-                        <Icon as={FiStar} boxSize={8} color="green.600" />
-                      </Box>
-                      
-                      <VStack spacing={2}>
-                        <Heading size="lg" color="gray.900">Success!</Heading>
-                        <Text fontSize="sm" color="gray.600">Thank you for your contribution</Text>
+              <Box 
+                position="absolute" 
+                inset={0} 
+                bg="blackAlpha.900" 
+                overflowY="auto"
+                p={4}
+              >
+                <VStack spacing={4} align="stretch" maxW="md" mx="auto">
+                  {/* Success Header */}
+                  <Card bg="white" borderRadius="xl" shadow="lg">
+                    <CardBody p={6}>
+                      <VStack spacing={4} textAlign="center">
+                        <Box bg="green.100" p={3} borderRadius="full">
+                          <Icon as={FiStar} boxSize={8} color="green.600" />
+                        </Box>
+                        <VStack spacing={2}>
+                          <Heading size="lg" color="gray.900">Analysis Complete!</Heading>
+                          <Text fontSize="sm" color="gray.600">
+                            AI-powered waste analysis results
+                          </Text>
+                        </VStack>
                       </VStack>
+                    </CardBody>
+                  </Card>
 
-                      <Box w="full" bg="gray.50" p={4} borderRadius="xl" border="1px solid" borderColor="gray.200">
-                        <VStack spacing={4} align="start">
-                          <HStack justify="space-between" w="full">
-                            <Text fontSize="sm" fontWeight="semibold" color="gray.700">Material</Text>
-                            <Text fontWeight="bold" color="gray.900">{analysisResult.primary_material}</Text>
-                          </HStack>
-                          
-                          <HStack justify="space-between" w="full">
-                            <Text fontSize="sm" fontWeight="semibold" color="gray.700">Priority</Text>
-                            <Text fontWeight="bold" color="gray.900">{analysisResult.cleanup_priority_score}/10</Text>
-                          </HStack>
-                          
-                          <HStack justify="space-between" w="full" align="start">
-                            <Text fontSize="sm" fontWeight="semibold" color="gray.700">Items</Text>
-                            <Text fontWeight="bold" color="gray.900" textAlign="right" maxW="32">
+                  {/* Main Analysis Results */}
+                  <Card bg="white" borderRadius="xl" shadow="lg">
+                    <CardBody p={6}>
+                      <VStack spacing={4} align="stretch">
+                        <Heading size="md" color="gray.900">Analysis Results</Heading>
+                        
+                        <HStack justify="space-between" p={3} bg="gray.50" borderRadius="lg">
+                          <Text fontSize="sm" fontWeight="semibold" color="gray.700">Material Type</Text>
+                          <Badge colorScheme="blue" variant="solid">
+                            {analysisResult.primary_material?.toUpperCase() || 'MIXED'}
+                          </Badge>
+                        </HStack>
+                        
+                        <HStack justify="space-between" p={3} bg="gray.50" borderRadius="lg">
+                          <Text fontSize="sm" fontWeight="semibold" color="gray.700">Priority Score</Text>
+                          <Badge 
+                            colorScheme={analysisResult.cleanup_priority_score >= 8 ? 'red' : 
+                                        analysisResult.cleanup_priority_score >= 6 ? 'orange' : 'green'} 
+                            variant="solid"
+                          >
+                            {analysisResult.cleanup_priority_score}/10
+                          </Badge>
+                        </HStack>
+                        
+                        <HStack justify="space-between" p={3} bg="gray.50" borderRadius="lg">
+                          <Text fontSize="sm" fontWeight="semibold" color="gray.700">Volume</Text>
+                          <Text fontWeight="bold" color="gray.900">
+                            {analysisResult.estimated_volume?.toUpperCase() || 'MEDIUM'}
+                          </Text>
+                        </HStack>
+                        
+                        {analysisResult.specific_items?.length > 0 && (
+                          <Box p={3} bg="gray.50" borderRadius="lg">
+                            <Text fontSize="sm" fontWeight="semibold" color="gray.700" mb={2}>Items Detected</Text>
+                            <Text fontSize="sm" color="gray.900">
                               {analysisResult.specific_items.join(', ')}
                             </Text>
-                          </HStack>
-                          
-                          <Divider />
-                          
-                          <HStack justify="space-between" w="full">
-                            <Text fontSize="sm" fontWeight="semibold" color="gray.700">Points Earned</Text>
-                            <Text fontWeight="bold" fontSize="lg" color="brand.600">
-                              +{analysisResult.cleanup_priority_score * 5} PTS
+                          </Box>
+                        )}
+                        
+                        {analysisResult.description && (
+                          <Box p={3} bg="blue.50" borderRadius="lg">
+                            <Text fontSize="sm" fontWeight="semibold" color="blue.700" mb={1}>Description</Text>
+                            <Text fontSize="sm" color="blue.900">
+                              {analysisResult.description}
                             </Text>
-                          </HStack>
-                        </VStack>
-                      </Box>
+                          </Box>
+                        )}
+                        
+                        <HStack justify="space-between" p={3} bg="green.50" borderRadius="lg">
+                          <Text fontSize="sm" fontWeight="semibold" color="green.700">Points Earned</Text>
+                          <Text fontWeight="bold" fontSize="lg" color="green.600">
+                            +{(analysisResult.cleanup_priority_score || 5) * 5} PTS
+                          </Text>
+                        </HStack>
+                      </VStack>
+                    </CardBody>
+                  </Card>
 
-                      <Button 
-                        w="full" 
-                        bg="brand.500" 
-                        color="white" 
-                        size="lg" 
-                        onClick={confirmSubmission}
-                        _hover={{ bg: 'brand.600' }}
-                      >
-                        Report Another
-                      </Button>
-                    </VStack>
-                  </CardBody>
-                </Card>
-              </Flex>
+                  {/* Hotspot Alert */}
+                  {hotspotData?.isHotspot && (
+                    <Alert status="warning" borderRadius="xl" bg="orange.50" border="1px solid orange.200">
+                      <AlertIcon color="orange.500" />
+                      <VStack align="start" spacing={1} flex={1}>
+                        <Text fontWeight="semibold" color="orange.700">Hotspot Detected!</Text>
+                        <Text fontSize="sm" color="orange.600">
+                          {hotspotData.similarReports} similar reports in this area. {hotspotData.recommendation}
+                        </Text>
+                      </VStack>
+                    </Alert>
+                  )}
+
+                  {/* Volunteer Matches */}
+                  {volunteerMatches.length > 0 && (
+                    <Card bg="white" borderRadius="xl" shadow="lg">
+                      <CardBody p={6}>
+                        <VStack spacing={4} align="stretch">
+                          <HStack spacing={2}>
+                            <Icon as={FiUsers} color="purple.500" />
+                            <Heading size="md" color="gray.900">Nearby Volunteers</Heading>
+                          </HStack>
+                          <Text fontSize="sm" color="gray.600">
+                            Found {volunteerMatches.length} volunteers who can help with this cleanup
+                          </Text>
+                          
+                          <VStack spacing={3} align="stretch">
+                            {volunteerMatches.slice(0, 3).map((volunteer, index) => (
+                              <Box key={index} p={3} bg="purple.50" borderRadius="lg" border="1px solid purple.200">
+                                <HStack justify="space-between">
+                                  <VStack align="start" spacing={0}>
+                                    <Text fontWeight="semibold" color="purple.900">{volunteer.name}</Text>
+                                    <Text fontSize="xs" color="purple.600">
+                                      {volunteer.experience_level} • {volunteer.distance_km}km away
+                                    </Text>
+                                  </VStack>
+                                  <Badge colorScheme="purple" variant="subtle">
+                                    {Math.round((volunteer.match_score || 0.5) * 100)}% match
+                                  </Badge>
+                                </HStack>
+                              </Box>
+                            ))}
+                          </VStack>
+                        </VStack>
+                      </CardBody>
+                    </Card>
+                  )}
+
+                  {/* Environmental Impact */}
+                  {analysisResult.environmental_risk_level && (
+                    <Card bg="white" borderRadius="xl" shadow="lg">
+                      <CardBody p={6}>
+                        <VStack spacing={4} align="stretch">
+                          <HStack spacing={2}>
+                            <Icon as={FiAlertCircle} 
+                              color={analysisResult.environmental_risk_level === 'critical' ? 'red.500' :
+                                     analysisResult.environmental_risk_level === 'high' ? 'orange.500' :
+                                     analysisResult.environmental_risk_level === 'medium' ? 'yellow.500' : 'green.500'} 
+                            />
+                            <Heading size="md" color="gray.900">Environmental Impact</Heading>
+                          </HStack>
+                          
+                          <HStack justify="space-between" p={3} bg="gray.50" borderRadius="lg">
+                            <Text fontSize="sm" fontWeight="semibold" color="gray.700">Risk Level</Text>
+                            <Badge 
+                              colorScheme={analysisResult.environmental_risk_level === 'critical' ? 'red' :
+                                          analysisResult.environmental_risk_level === 'high' ? 'orange' :
+                                          analysisResult.environmental_risk_level === 'medium' ? 'yellow' : 'green'} 
+                              variant="solid"
+                            >
+                              {analysisResult.environmental_risk_level?.toUpperCase() || 'MEDIUM'}
+                            </Badge>
+                          </HStack>
+                          
+                          <HStack justify="space-between" p={3} bg="gray.50" borderRadius="lg">
+                            <Text fontSize="sm" fontWeight="semibold" color="gray.700">Recyclable</Text>
+                            <Badge colorScheme={analysisResult.recyclable ? 'green' : 'gray'} variant="solid">
+                              {analysisResult.recyclable ? 'YES' : 'NO'}
+                            </Badge>
+                          </HStack>
+                          
+                          {analysisResult.estimated_cleanup_time_minutes && (
+                            <HStack justify="space-between" p={3} bg="gray.50" borderRadius="lg">
+                              <Text fontSize="sm" fontWeight="semibold" color="gray.700">Est. Cleanup Time</Text>
+                              <Text fontWeight="bold" color="gray.900">
+                                {analysisResult.estimated_cleanup_time_minutes} min
+                              </Text>
+                            </HStack>
+                          )}
+                        </VStack>
+                      </CardBody>
+                    </Card>
+                  )}
+
+                  {/* Action Button */}
+                  <Button 
+                    w="full" 
+                    bg="brand.500" 
+                    color="white" 
+                    size="lg" 
+                    onClick={confirmSubmission}
+                    _hover={{ bg: 'brand.600' }}
+                    borderRadius="xl"
+                    py={6}
+                  >
+                    Report Another Location
+                  </Button>
+                </VStack>
+              </Box>
             )}
 
             {!submitted && !isAnalyzing && (
-              <HStack 
-                position="absolute" 
-                bottom={0} 
-                left={0} 
-                right={0} 
-                justify="center" 
-                spacing={4} 
-                px={4} 
-                py={4} 
-                bg="blackAlpha.800"
-                backdropFilter="blur(10px)"
-              >
-                <Button 
-                  flex={1} 
-                  maxW="48" 
-                  bg="whiteAlpha.200" 
-                  color="white" 
-                  size="lg" 
-                  onClick={retake}
-                  _hover={{ bg: 'whiteAlpha.300' }}
+              <>
+                {/* User Notes Input */}
+                <Box 
+                  position="absolute" 
+                  bottom="6rem" 
+                  left={4} 
+                  right={4}
+                  bg="blackAlpha.700"
+                  borderRadius="lg"
+                  p={3}
+                  backdropFilter="blur(10px)"
                 >
-                  Retake
-                </Button>
-                <Button 
-                  flex={1} 
-                  maxW="48" 
-                  bg="brand.500" 
-                  color="white" 
-                  size="lg" 
-                  onClick={submitReport}
-                  _hover={{ bg: 'brand.600' }}
+                  <Input
+                    placeholder="Add notes about this trash (optional)"
+                    value={userNotes}
+                    onChange={(e) => setUserNotes(e.target.value)}
+                    bg="whiteAlpha.200"
+                    border="none"
+                    color="white"
+                    _placeholder={{ color: 'gray.300' }}
+                    size="sm"
+                  />
+                </Box>
+                
+                {/* Action Buttons */}
+                <HStack 
+                  position="absolute" 
+                  bottom={0} 
+                  left={0} 
+                  right={0} 
+                  justify="center" 
+                  spacing={4} 
+                  px={4} 
+                  py={4} 
+                  bg="blackAlpha.800"
+                  backdropFilter="blur(10px)"
                 >
-                  Analyze & Submit
-                </Button>
-              </HStack>
+                  <Button 
+                    flex={1} 
+                    maxW="48" 
+                    bg="whiteAlpha.200" 
+                    color="white" 
+                    size="lg" 
+                    onClick={retake}
+                    _hover={{ bg: 'whiteAlpha.300' }}
+                  >
+                    Retake
+                  </Button>
+                  <Button 
+                    flex={1} 
+                    maxW="48" 
+                    bg="brand.500" 
+                    color="white" 
+                    size="lg" 
+                    onClick={submitReport}
+                    _hover={{ bg: 'brand.600' }}
+                  >
+                    Analyze & Submit
+                  </Button>
+                </HStack>
+              </>
             )}
           </Box>
         )}

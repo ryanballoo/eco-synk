@@ -1,5 +1,8 @@
 /* Removed Tailwind - using Chakra UI instead */
 
+/* Import map styles */
+@import './styles/map.css';
+
 /* Mobile-safe areas for notches and browser UI */
 html, body {
   margin: 0;
