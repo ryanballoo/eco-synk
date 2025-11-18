@@ -1,4 +1,4 @@
-# Core AI/ML Libraries
+# Production requirements - CPU only, minimal dependencies
 google-generativeai>=0.8.0
 qdrant-client>=1.15.0
 sentence-transformers>=2.5.1
@@ -17,9 +17,3 @@ pydantic-settings>=2.1.0
 httpx>=0.26.0
 pillow>=10.2.0
 numpy>=1.24.3
-
-# Development & Testing
-pytest>=7.4.3
-pytest-asyncio>=0.21.1
-requests>=2.31.0
-
