@@ -10,6 +10,7 @@ import math
 import base64
 import tempfile
 import traceback
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -27,6 +28,8 @@ from embeddings.generator import EmbeddingGenerator
 from yolo.waste_detector import WasteDetector
 from geocoding import reverse_geocode
 from campaigns import CampaignManager
+=======
+from geocoding import reverse_geocode
 
 
 # ============================================================================
@@ -681,6 +684,106 @@ async def detect_waste(
         print(f"❌ Detection failed: {str(e)}")
         print(f"Stack trace:\n{error_trace}")
         raise HTTPException(status_code=500, detail=f"Detection failed: {str(e)}")
+
+
+
+@app.post("/detect-waste/live")
+async def detect_waste_live(
+    file: UploadFile = File(..., description="Video frame for live waste detection"),
+    location: Optional[str] = Form(None, description="JSON string of location {lat, lon}"),
+    include_summary: bool = Form(True, description="Include detection summary in response")
+):
+    """Run lightweight YOLO detection on a single frame for live preview overlays."""
+    if waste_detector is None:
+        raise HTTPException(
+            status_code=503,
+            detail="YOLO detector not configured. Live detection unavailable."
+        )
+
+    start_time = time.perf_counter()
+
+    temp_path: Optional[Path] = None
+
+    try:
+        normalized_location = None
+        if location:
+            try:
+                location_payload = json.loads(location)
+                normalized_location = _normalize_payload_location(location_payload)
+            except json.JSONDecodeError as decode_error:
+                raise HTTPException(status_code=400, detail="Invalid location JSON") from decode_error
+
+        file_extension = Path(file.filename or "frame.jpg").suffix or ".jpg"
+        temp_fd, temp_path_str = tempfile.mkstemp(suffix=file_extension, prefix="ecosynk_live_")
+        temp_path = Path(temp_path_str)
+        os.close(temp_fd)
+
+        frame_width = None
+        frame_height = None
+
+        raw_bytes = await file.read()
+
+        try:
+            from PIL import Image
+            import io
+
+            pil_image = Image.open(io.BytesIO(raw_bytes))
+            frame_width, frame_height = pil_image.size
+
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+
+            pil_image.save(str(temp_path), 'JPEG', quality=90)
+        except Exception as pil_error:  # noqa: BLE001 - log and fall back
+            print(f"⚠️  Live frame conversion failed: {pil_error}. Saving raw bytes.")
+            with open(temp_path, "wb") as fallback_file:
+                fallback_file.write(raw_bytes)
+
+            if frame_width is None or frame_height is None:
+                try:
+                    import cv2
+
+                    cv_img = cv2.imread(str(temp_path))
+                    if cv_img is not None:
+                        frame_height, frame_width = cv_img.shape[:2]
+                except Exception as cv_error:  # noqa: BLE001 - best effort metadata only
+                    print(f"⚠️  Unable to derive frame dimensions: {cv_error}")
+
+        detections = waste_detector.detect(str(temp_path))
+        detection_summary = waste_detector.get_detection_summary(detections) if include_summary else None
+
+        latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+        response: Dict[str, Any] = {
+            "status": "success",
+            "detections": detections,
+            "latency_ms": latency_ms
+        }
+
+        if include_summary:
+            response["detection_summary"] = detection_summary
+
+        if frame_width and frame_height:
+            response["frame_dimensions"] = {"width": frame_width, "height": frame_height}
+
+        if normalized_location:
+            response["location"] = normalized_location
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        error_trace = traceback.format_exc()
+        print(f"❌ Live detection failed: {error}")
+        print(f"Stack trace:\n{error_trace}")
+        raise HTTPException(status_code=500, detail=f"Live detection failed: {error}") from error
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
  
