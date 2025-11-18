@@ -238,8 +238,13 @@ async def startup_event():
     try:
         print("  → Loading YOLOv8 waste detector...")
         waste_detector = WasteDetector()
-        # Load pretrained YOLOv8n model as fallback
-        waste_detector.load_model('yolov8n.pt')  # Will auto-download if not present
+        custom_model = Path(__file__).parent / 'yolo' / 'weights' / 'best.pt'
+        if custom_model.exists():
+            print(f"  → Found custom weights at {custom_model}")
+            waste_detector.load_model(str(custom_model))
+        else:
+            print("  → Custom weights not found, using default yolov8n.pt")
+            waste_detector.load_model('yolov8n.pt')  # Will auto-download if not present
         print("  ✅ YOLO detector ready")
     except Exception as e:
         print(f"  ⚠️  YOLO detector failed: {e}")
