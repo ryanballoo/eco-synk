@@ -64,9 +64,48 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
 
   const reverseGeocode = async (lat, lon) => {
     try {
-      const response = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`);
       const data = await response.json();
-      return `${data.city || data.locality || 'Unknown'}, ${data.countryName || 'Unknown'}`;
+      
+      if (data.address) {
+        const addr = data.address;
+        const parts = [];
+        
+        // Building/house number and street
+        if (addr.house_number && addr.road) {
+          parts.push(`${addr.house_number} ${addr.road}`);
+        } else if (addr.road) {
+          parts.push(addr.road);
+        }
+        
+        // Neighborhood/suburb
+        if (addr.neighbourhood) {
+          parts.push(addr.neighbourhood);
+        } else if (addr.suburb) {
+          parts.push(addr.suburb);
+        }
+        
+        // City/town
+        if (addr.city) {
+          parts.push(addr.city);
+        } else if (addr.town) {
+          parts.push(addr.town);
+        }
+        
+        // State/emirate
+        if (addr.state && !parts.includes(addr.state)) {
+          parts.push(addr.state);
+        }
+        
+        // Country
+        if (addr.country && !parts.includes(addr.country)) {
+          parts.push(addr.country);
+        }
+        
+        return parts.length > 0 ? parts.join(', ') : data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+      }
+      
+      return data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
     } catch (error) {
       return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
     }
@@ -230,10 +269,12 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
 
               <FormControl>
                 <FormLabel>Location</FormLabel>
-                <HStack>
-                  <Text fontSize="sm" color="gray.600" flex={1}>
-                    {locationName}
-                  </Text>
+                <VStack spacing={2} align="stretch">
+                  <Input
+                    value={locationName}
+                    onChange={(e) => setLocationName(e.target.value)}
+                    placeholder="Enter campaign location..."
+                  />
                   <Button
                     size="sm"
                     colorScheme="blue"
@@ -241,10 +282,11 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
                     onClick={getCurrentLocation}
                     isLoading={isGettingLocation}
                     loadingText="Getting..."
+                    alignSelf="flex-start"
                   >
                     📍 Use Current Location
                   </Button>
-                </HStack>
+                </VStack>
               </FormControl>
 
               <HStack spacing={4}>
