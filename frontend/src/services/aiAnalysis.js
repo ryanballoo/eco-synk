@@ -169,6 +169,66 @@ class AIAnalysisService {
   }
 
   /**
+   * Run lightweight YOLO detection on a live video frame
+   * @param {Blob|File} frameBlob - Frame image to analyze (JPEG recommended)
+   * @param {Object} location - Optional GPS coordinates {lat, lon}
+   * @param {Object} options - Additional options { includeSummary, signal }
+   * @returns {Promise<Object>} Live detection results
+   */
+  async detectLiveFrame(frameBlob, location = null, options = {}) {
+    try {
+      if (!frameBlob) {
+        throw new Error('Missing frame data for live detection');
+      }
+
+      const formData = new FormData();
+      const fileLike = frameBlob instanceof File
+        ? frameBlob
+        : new File([frameBlob], 'frame.jpg', { type: frameBlob.type || 'image/jpeg' });
+
+      formData.append('file', fileLike);
+
+      if (location) {
+        formData.append('location', JSON.stringify(location));
+      }
+
+      if (options.includeSummary === false) {
+        formData.append('include_summary', 'false');
+      }
+
+      const response = await fetch(`${API_BASE_URL}/detect-waste/live`, {
+        method: 'POST',
+        body: formData,
+        signal: options.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`Live detection failed: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      return {
+        success: true,
+        detections: result.detections || [],
+        detectionSummary: result.detection_summary || null,
+        frameDimensions: result.frame_dimensions || null,
+        latencyMs: result.latency_ms ?? null
+      };
+
+    } catch (error) {
+      console.error('Live Detection Error:', error);
+      return {
+        success: false,
+        error: error.message,
+        detections: [],
+        detectionSummary: null,
+        frameDimensions: null
+      };
+    }
+  }
+
+  /**
    * Batch analyze multiple images
    * @param {File[]} imageFiles - Array of image files
    * @returns {Promise<Object>} Batch analysis results
