@@ -14,6 +14,10 @@ import {
   FormLabel,
   FormErrorMessage,
   Select,
+  Slider,
+  SliderTrack,
+  SliderFilledTrack,
+  SliderThumb,
   useToast,
   Modal,
   ModalOverlay,
@@ -38,6 +42,8 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
   });
   
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [locationName, setLocationName] = useState('Dubai, UAE');
   const [errors, setErrors] = useState({});
   const toast = useToast();
 
@@ -54,6 +60,58 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
         [field]: null
       }));
     }
+  };
+
+  const reverseGeocode = async (lat, lon) => {
+    try {
+      const response = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+      const data = await response.json();
+      return `${data.city || data.locality || 'Unknown'}, ${data.countryName || 'Unknown'}`;
+    } catch (error) {
+      return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+    }
+  };
+
+  const getCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      toast({
+        title: 'Location not supported',
+        description: 'Your browser does not support geolocation',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    setIsGettingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        handleInputChange('location', { lat: latitude, lon: longitude });
+        const locationText = await reverseGeocode(latitude, longitude);
+        setLocationName(locationText);
+        toast({
+          title: 'Location updated',
+          description: `Campaign location set to ${locationText}`,
+          status: 'success',
+          duration: 3000,
+          isClosable: true,
+        });
+        setIsGettingLocation(false);
+      },
+      (error) => {
+        toast({
+          title: 'Location error',
+          description: 'Unable to get your current location',
+          status: 'error',
+          duration: 3000,
+          isClosable: true,
+        });
+        setIsGettingLocation(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const validateForm = () => {
@@ -170,6 +228,25 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
                 />
               </FormControl>
 
+              <FormControl>
+                <FormLabel>Location</FormLabel>
+                <HStack>
+                  <Text fontSize="sm" color="gray.600" flex={1}>
+                    {locationName}
+                  </Text>
+                  <Button
+                    size="sm"
+                    colorScheme="blue"
+                    variant="outline"
+                    onClick={getCurrentLocation}
+                    isLoading={isGettingLocation}
+                    loadingText="Getting..."
+                  >
+                    📍 Use Current Location
+                  </Button>
+                </HStack>
+              </FormControl>
+
               <HStack spacing={4}>
                 <FormControl isInvalid={errors.target_funding_usd}>
                   <FormLabel>Funding Goal (USD)</FormLabel>
@@ -181,6 +258,19 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
                   >
                     <NumberInputField />
                   </NumberInput>
+                  <Slider
+                    value={formData.target_funding_usd}
+                    onChange={(value) => handleInputChange('target_funding_usd', value)}
+                    min={100}
+                    max={10000}
+                    step={50}
+                    mt={2}
+                  >
+                    <SliderTrack>
+                      <SliderFilledTrack />
+                    </SliderTrack>
+                    <SliderThumb />
+                  </Slider>
                   <FormErrorMessage>{errors.target_funding_usd}</FormErrorMessage>
                 </FormControl>
 
