@@ -166,12 +166,12 @@ class WasteDetector:
                     # Get COCO class name
                     coco_class = result.names[class_id]
                     
-                    # Map COCO class to waste category
-                    waste_class = COCO_TO_WASTE_MAPPING.get(coco_class, None)
-                    
-                    # Skip if not mappable to waste category
-                    if waste_class is None:
-                        continue
+                    # Prefer native class names when they match our waste taxonomy
+                    if coco_class in WASTE_CLASSES:
+                        waste_class = coco_class
+                    else:
+                        # Map COCO class to waste category, fall back to original name
+                        waste_class = COCO_TO_WASTE_MAPPING.get(coco_class, coco_class)
                     
                     detection = {
                         'bbox': {
