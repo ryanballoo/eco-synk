@@ -4,6 +4,13 @@ Railway entry point for EcoSynk AI Services
 """
 import os
 import sys
+import subprocess
+
+# Download model on first run
+try:
+    subprocess.run(["python", "download_model.py"], check=True)
+except:
+    print("Model download failed, continuing...")
 
 # Add ai-services directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'ai-services'))
