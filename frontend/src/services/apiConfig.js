@@ -14,13 +14,10 @@ const resolveApiBaseUrl = () => {
   }
 
   if (typeof window !== 'undefined') {
-
     const { protocol, hostname, port } = window.location;
     if (DEV_SERVER_PORTS.has(port)) {
       return '/api';
     }
-
-    const { hostname, port } = window.location;
 
     const configuredPort = import.meta.env?.VITE_API_PORT;
     const fallbackPort = configuredPort || '8000';

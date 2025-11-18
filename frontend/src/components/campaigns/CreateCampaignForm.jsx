@@ -14,6 +14,10 @@ import {
   FormLabel,
   FormErrorMessage,
   Select,
+  Slider,
+  SliderTrack,
+  SliderFilledTrack,
+  SliderThumb,
   useToast,
   Modal,
   ModalOverlay,
@@ -38,6 +42,8 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
   });
   
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [locationName, setLocationName] = useState('Dubai, UAE');
   const [errors, setErrors] = useState({});
   const toast = useToast();
 
@@ -54,6 +60,97 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
         [field]: null
       }));
     }
+  };
+
+  const reverseGeocode = async (lat, lon) => {
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`);
+      const data = await response.json();
+      
+      if (data.address) {
+        const addr = data.address;
+        const parts = [];
+        
+        // Building/house number and street
+        if (addr.house_number && addr.road) {
+          parts.push(`${addr.house_number} ${addr.road}`);
+        } else if (addr.road) {
+          parts.push(addr.road);
+        }
+        
+        // Neighborhood/suburb
+        if (addr.neighbourhood) {
+          parts.push(addr.neighbourhood);
+        } else if (addr.suburb) {
+          parts.push(addr.suburb);
+        }
+        
+        // City/town
+        if (addr.city) {
+          parts.push(addr.city);
+        } else if (addr.town) {
+          parts.push(addr.town);
+        }
+        
+        // State/emirate
+        if (addr.state && !parts.includes(addr.state)) {
+          parts.push(addr.state);
+        }
+        
+        // Country
+        if (addr.country && !parts.includes(addr.country)) {
+          parts.push(addr.country);
+        }
+        
+        return parts.length > 0 ? parts.join(', ') : data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+      }
+      
+      return data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+    } catch (error) {
+      return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+    }
+  };
+
+  const getCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      toast({
+        title: 'Location not supported',
+        description: 'Your browser does not support geolocation',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    setIsGettingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        handleInputChange('location', { lat: latitude, lon: longitude });
+        const locationText = await reverseGeocode(latitude, longitude);
+        setLocationName(locationText);
+        toast({
+          title: 'Location updated',
+          description: `Campaign location set to ${locationText}`,
+          status: 'success',
+          duration: 3000,
+          isClosable: true,
+        });
+        setIsGettingLocation(false);
+      },
+      (error) => {
+        toast({
+          title: 'Location error',
+          description: 'Unable to get your current location',
+          status: 'error',
+          duration: 3000,
+          isClosable: true,
+        });
+        setIsGettingLocation(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const validateForm = () => {
@@ -170,6 +267,28 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
                 />
               </FormControl>
 
+              <FormControl>
+                <FormLabel>Location</FormLabel>
+                <VStack spacing={2} align="stretch">
+                  <Input
+                    value={locationName}
+                    onChange={(e) => setLocationName(e.target.value)}
+                    placeholder="Enter campaign location..."
+                  />
+                  <Button
+                    size="sm"
+                    colorScheme="blue"
+                    variant="outline"
+                    onClick={getCurrentLocation}
+                    isLoading={isGettingLocation}
+                    loadingText="Getting..."
+                    alignSelf="flex-start"
+                  >
+                    📍 Use Current Location
+                  </Button>
+                </VStack>
+              </FormControl>
+
               <HStack spacing={4}>
                 <FormControl isInvalid={errors.target_funding_usd}>
                   <FormLabel>Funding Goal (USD)</FormLabel>
@@ -181,6 +300,19 @@ const CreateCampaignForm = ({ isOpen, onClose, onSuccess }) => {
                   >
                     <NumberInputField />
                   </NumberInput>
+                  <Slider
+                    value={formData.target_funding_usd}
+                    onChange={(value) => handleInputChange('target_funding_usd', value)}
+                    min={100}
+                    max={10000}
+                    step={50}
+                    mt={2}
+                  >
+                    <SliderTrack>
+                      <SliderFilledTrack />
+                    </SliderTrack>
+                    <SliderThumb />
+                  </Slider>
                   <FormErrorMessage>{errors.target_funding_usd}</FormErrorMessage>
                 </FormControl>
 
