@@ -27,8 +27,6 @@ from qdrant.vector_store import EcoSynkVectorStore
 from embeddings.generator import EmbeddingGenerator
 from yolo.waste_detector import WasteDetector
 from campaigns import CampaignManager
-=======
-from geocoding import reverse_geocode
 
 
 # ============================================================================
