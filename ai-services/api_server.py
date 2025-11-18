@@ -23,6 +23,7 @@ from config import settings, validate_config
 from gemini.trash_analyzer import TrashAnalyzer
 from qdrant.vector_store import EcoSynkVectorStore
 from embeddings.generator import EmbeddingGenerator
+from campaigns import CampaignManager
 
 
 # ============================================================================
@@ -116,6 +117,7 @@ app.add_middleware(
 analyzer: Optional[TrashAnalyzer] = None
 vector_store: Optional[EcoSynkVectorStore] = None
 embedder: Optional[EmbeddingGenerator] = None
+campaign_manager: Optional[CampaignManager] = None
 
 
 def _normalize_payload_location(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
@@ -177,7 +179,7 @@ def _parse_timestamp(candidate: Optional[str]) -> Optional[datetime]:
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
-    global analyzer, vector_store, embedder
+    global analyzer, vector_store, embedder, campaign_manager
     
     print("\n" + "=" * 60)
     print("🚀 Starting EcoSynk AI Services")
@@ -224,6 +226,19 @@ async def startup_event():
         print(f"  ⚠️  Gemini failed: {e}")
         analyzer = None
     
+    # Campaign Manager
+    try:
+        if vector_store and embedder:
+            print("  → Initializing Campaign Manager...")
+            campaign_manager = CampaignManager(vector_store, embedder)
+            print("  ✅ Campaign Manager ready")
+        else:
+            print("  ⚠️  Campaign Manager requires vector store and embedder")
+            campaign_manager = None
+    except Exception as e:
+        print(f"  ⚠️  Campaign Manager failed: {e}")
+        campaign_manager = None
+    
     print("\n✅ Server startup complete!")
     print(f"📡 API endpoints available at http://{settings.api_host}:{settings.api_port}")
     print(f"📚 Documentation: http://{settings.api_host}:{settings.api_port}/docs")
@@ -252,7 +267,8 @@ async def root():
             "health": "/health",
             "analyze": "/analyze-trash",
             "volunteers": "/find-volunteers",
-            "hotspots": "/detect-hotspots"
+            "hotspots": "/detect-hotspots",
+            "campaigns": "/campaigns"
         }
     }
 
