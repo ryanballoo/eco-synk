@@ -31,6 +31,8 @@ import JoinCampaignModal from './JoinCampaignModal';
 import CreateCampaignForm from './CreateCampaignForm';
 import campaignService from '../../services/campaignService';
 import { normalizeCampaignForUI } from '../../utils/campaignFormatter';
+import { useAuth } from '../../contexts/AuthContext';
+import AuthModal from '../auth/AuthModal';
 
 // Campaign list component
 const CampaignList = ({
@@ -81,7 +83,9 @@ const CampaignList = ({
 
 
 const CampaignsPage = () => {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState(0);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [campaigns, setCampaigns] = useState([]);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
@@ -222,6 +226,10 @@ const CampaignsPage = () => {
   }, [dataSource]);
 
   const handleDonate = (campaign) => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
     setSelectedCampaign(campaign);
     setShowDonationModal(true);
   };
@@ -232,8 +240,20 @@ const CampaignsPage = () => {
   };
 
   const handleJoinCampaign = (campaign) => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
     setSelectedCampaign(campaign);
     setShowJoinModal(true);
+  };
+
+  const handleCreateCampaign = () => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    setShowCreateForm(true);
   };
 
   const handleDonationSubmit = (amount) => {
@@ -372,7 +392,7 @@ const CampaignsPage = () => {
               <Button
                 size="sm"
                 colorScheme="whiteAlpha"
-                onClick={() => setShowCreateForm(true)}
+                onClick={handleCreateCampaign}
                 borderRadius="full"
               >
                 + Create
@@ -481,6 +501,12 @@ const CampaignsPage = () => {
         isOpen={showCreateForm}
         onClose={() => setShowCreateForm(false)}
         onSuccess={handleCampaignCreated}
+      />
+
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
       />
     </Flex>
   );
