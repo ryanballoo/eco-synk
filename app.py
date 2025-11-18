@@ -8,15 +8,19 @@ import subprocess
 
 # Download model on first run
 try:
-    subprocess.run(["python", "download_model.py"], check=True)
-except:
-    print("Model download failed, continuing...")
+    subprocess.run([sys.executable, "download_model.py"], check=True)
+except Exception as e:
+    print(f"Model download failed: {e}, continuing...")
 
 # Add ai-services directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'ai-services'))
 
 # Import and run the FastAPI app
-from api_server import app
+try:
+    from api_server import app
+except ImportError:
+    sys.path.append('ai-services')
+    from api_server import app
 
 if __name__ == "__main__":
     import uvicorn
