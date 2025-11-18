@@ -36,7 +36,9 @@ const formatCoordinatePair = (lat, lon) => {
   return `${latNum.toFixed(4)}, ${lonNum.toFixed(4)}`;
 };
 
+
 const LIVE_PREVIEW_INTERVAL_MS = 1500;
+
 
 const USER_STATS = {
   points: 420,
@@ -125,6 +127,7 @@ const CameraPage = () => {
     };
   }, [stopLiveDetection]);
 
+
   const locationMetadata = analysisResult?.metadata?.location;
   const locationContext = analysisResult?.metadata?.location_context;
   const locationName = analysisResult?.metadata?.location_name || locationContext?.name || locationContext?.display_name;
@@ -139,9 +142,11 @@ const CameraPage = () => {
         .map(segment => segment.charAt(0).toUpperCase() + segment.slice(1))
         .join(' ')
     : null;
+
   const liveLatencyLabel = Number.isFinite(liveDetectionLatency)
     ? `${Math.round(liveDetectionLatency)}ms`
     : null;
+
 
   // Simplified scroll handler with debouncing
   const handleScroll = React.useCallback((e) => {
@@ -771,15 +776,6 @@ const CameraPage = () => {
                 )}
 
                 {isFlashing && <Box position="absolute" inset={0} bg="white" opacity={0.7} pointerEvents="none" />}
-
-                <Center position="absolute" inset={0} pointerEvents="none">
-                  <VStack spacing={4}>
-                    <Box borderWidth={4} borderColor="brand.400" borderRadius="full" w={48} h={48} opacity={0.5} />
-                    <Text color="white" textAlign="center" fontSize="sm" fontWeight="semibold" opacity={0.75}>
-                      Center the trash in the circle
-                    </Text>
-                  </VStack>
-                </Center>
 
                 <Flex position="absolute" bottom="6rem" left="50%" transform="translateX(-50%)" justify="center" zIndex={10}>
                   <Button
