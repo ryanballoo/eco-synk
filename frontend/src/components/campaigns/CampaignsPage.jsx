@@ -261,14 +261,6 @@ const CampaignsPage = () => {
     setShowJoinModal(true);
   };
 
-  const handleCreateCampaign = () => {
-    if (!user) {
-      setShowAuthModal(true);
-      return;
-    }
-    setShowCreateForm(true);
-  };
-
   // const handleDonationSubmit = (amount) => {
   //   if (selectedCampaign) {
   //     const updatedCampaigns = campaigns.map(c =>
@@ -420,9 +412,13 @@ const CampaignsPage = () => {
                 size="sm"
                 bg="brand.500"
                 color="neutral.900"
-                onClick={() => setShowCreateForm(true)}
-                colorScheme="whiteAlpha"
-                onClick={handleCreateCampaign}
+                onClick={() => {
+                  if (!user) {
+                    setShowAuthModal(true);
+                    return;
+                  }
+                  setShowCreateForm(true);
+                }}
                 borderRadius="full"
                 _hover={{ bg: 'brand.600' }}
               >
