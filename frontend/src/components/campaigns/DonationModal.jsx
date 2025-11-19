@@ -1,0 +1,201 @@
+import React, { useState } from 'react';
+
+const DonationModal = ({ campaign, onClose, onSubmit }) => {
+  const [amount, setAmount] = useState(25);
+  const [paymentMethod, setPaymentMethod] = useState('card');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState(null);
+
+  const predefinedAmounts = [10, 25, 50, 100];
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!amount || amount < 1) {
+      setError('Please enter a valid amount');
+      return;
+    }
+
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+      // Simulate payment processing
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      
+      onSubmit(amount, paymentMethod);
+      setAmount(25);
+    } catch {
+      setError('Payment processing failed. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Safely extract funding data with fallbacks
+  const currentFunding = campaign?.funding?.current ?? campaign?.goals?.current_funding_usd ?? 0;
+  const fundingGoal = campaign?.funding?.goal ?? campaign?.goals?.target_funding_usd ?? 10000;
+  const fundingPercent = Math.min(
+    fundingGoal > 0 ? (currentFunding / fundingGoal) * 100 : 0,
+    100
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-80 backdrop-blur-sm flex items-end z-50 safe-area-inset">
+      {/* Modal */}
+      <div className="w-full bg-neutral-800 border border-neutral-700 rounded-t-2xl max-w-md mx-auto animate-slide-up">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-neutral-700 bg-neutral-900 rounded-t-2xl">
+          <h2 className="text-xl font-bold text-neutral-50">Donate to Campaign</h2>
+          <button
+            onClick={onClose}
+            disabled={isProcessing}
+            className="text-neutral-400 hover:text-neutral-50 hover:bg-neutral-700 rounded-lg p-1 disabled:opacity-50 text-2xl leading-none transition-all"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Campaign Info */}
+        <div className="p-5 bg-gradient-to-br from-brand-500/10 to-brand-600/5 border-b border-neutral-700">
+          <h3 className="font-bold text-neutral-50 text-lg mb-4">{campaign?.title || campaign?.campaign_name || 'Campaign'}</h3>
+          
+          {/* Funding Stats Grid */}
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div className="bg-neutral-800/50 rounded-lg p-3 border border-neutral-700/50">
+              <p className="text-xs text-neutral-400 mb-1">Raised</p>
+              <p className="text-xl font-bold text-brand-500">AED {currentFunding.toLocaleString()}</p>
+            </div>
+            <div className="bg-neutral-800/50 rounded-lg p-3 border border-neutral-700/50">
+              <p className="text-xs text-neutral-400 mb-1">Goal</p>
+              <p className="text-xl font-bold text-neutral-200">AED {fundingGoal.toLocaleString()}</p>
+            </div>
+          </div>
+          
+          {/* Progress Bar */}
+          <div className="space-y-2">
+            <div className="w-full bg-neutral-700 rounded-full h-3 overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-brand-500 to-brand-600 h-3 rounded-full transition-all duration-500 shadow-[0_0_12px_rgba(47,212,99,0.5)]"
+                style={{ width: `${fundingPercent}%` }}
+              />
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm font-semibold text-brand-500">{Math.round(fundingPercent)}% funded</span>
+              <span className="text-xs text-neutral-400">AED {(fundingGoal - currentFunding).toLocaleString()} remaining</span>
+            </div>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {/* Amount Input */}
+          <div>
+            <label className="block text-sm font-bold text-neutral-50 mb-2">
+              Donation Amount
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-3 text-xl">💰</span>
+              <input
+                type="number"
+                min="1"
+                max="9999"
+                value={amount}
+                onChange={(e) => {
+                  setAmount(parseInt(e.target.value) || '');
+                  setError(null);
+                }}
+                className="w-full pl-10 pr-3 py-3 border-2 border-neutral-700 bg-neutral-700 rounded-lg focus:border-brand-500 focus:ring-2 focus:ring-brand-500 focus:outline-none text-lg font-bold text-neutral-50 placeholder-neutral-400"
+                placeholder="0"
+                disabled={isProcessing}
+              />
+            </div>
+          </div>
+
+          {/* Predefined Amounts */}
+          <div className="grid grid-cols-4 gap-2">
+            {predefinedAmounts.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => {
+                  setAmount(preset);
+                  setError(null);
+                }}
+                disabled={isProcessing}
+                className={`py-2 px-3 rounded-lg font-bold text-sm transition-all duration-200 min-h-10 border ${
+                  amount === preset
+                    ? 'bg-brand-500 text-neutral-900 border-brand-500 shadow-[0_0_10px_rgba(47,212,99,0.4)]'
+                    : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600 border-neutral-600'
+                } disabled:opacity-50`}
+              >
+                ${preset}
+              </button>
+            ))}
+          </div>
+
+          {/* Payment Method */}
+          <div>
+            <label className="block text-sm font-bold text-neutral-50 mb-2">
+              Payment Method
+            </label>
+            <div className="space-y-2">
+              {['card', 'paypal', 'apple_pay'].map((method) => (
+                <label key={method} className={`flex items-center p-3 border-2 rounded-lg cursor-pointer transition-all duration-200 ${
+                  paymentMethod === method
+                    ? 'border-brand-500 bg-rgba(47,212,99,0.1)'
+                    : 'border-neutral-700 bg-neutral-700 hover:border-brand-500'
+                }`}>
+                  <input
+                    type="radio"
+                    name="paymentMethod"
+                    value={method}
+                    checked={paymentMethod === method}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    disabled={isProcessing}
+                    className="w-4 h-4 accent-brand-500"
+                  />
+                  <span className="ml-3 font-medium text-neutral-50">
+                    {method === 'card' && '💳 Credit/Debit Card'}
+                    {method === 'paypal' && '🅿️ PayPal'}
+                    {method === 'apple_pay' && '🍎 Apple Pay'}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Error Message */}
+          {error && (
+            <div className="p-3 bg-red-900/20 border border-red-500 text-red-400 rounded-lg text-sm font-medium">
+              ❌ {error}
+            </div>
+          )}
+
+          {/* Submit Button */}
+          <button
+            type="submit"
+            disabled={isProcessing || !amount}
+            className="w-full bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-900 py-4 rounded-lg font-bold transition-all duration-200 min-h-12 shadow-[0_0_10px_rgba(47,212,99,0.3)] hover:shadow-[0_0_15px_rgba(47,212,99,0.5)]"
+          >
+            {isProcessing ? (
+              <div className="flex items-center justify-center">
+                <div className="w-5 h-5 border-3 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                Processing...
+              </div>
+            ) : (
+              `Donate $${amount}`
+            )}
+          </button>
+
+          {/* Info Text */}
+          <p className="text-xs text-gray-600 text-center">
+            ✓ Secure payment processed instantly
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+export default DonationModal;

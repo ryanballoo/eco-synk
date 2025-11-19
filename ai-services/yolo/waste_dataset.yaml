@@ -1,0 +1,21 @@
+names:
+- plastic_bottle
+- glass_bottle
+- can
+- paper
+- cardboard
+- plastic_bag
+- food_waste
+- e_waste
+- battery
+- clothing
+- metal
+- medical_waste
+- hazardous
+- organic
+- recyclable_plastic
+nc: 15
+path: C:\Users\ryanb\eco-synk\ai-services\yolo\waste_dataset
+test: images/test
+train: images/train
+val: images/val

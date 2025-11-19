@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 11
+names: ['E-waste', 'Metal-waste', 'bottles', 'cardboard', 'cups', 'organic-waste', 'other-trash', 'paper', 'plastic-waste', 'trash', 'trashbin']
+
+roboflow:
+  workspace: waste-mhl3v
+  project: waste-detect-0nyzr
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/waste-mhl3v/waste-detect-0nyzr/dataset/1
